@@ -32,8 +32,9 @@ def evaluate(semantic):
         with urlopen("http://127.0.0.1:8000/search?" + params, timeout=8) as response:
             data = json.load(response)
         elapsed = round((time.monotonic() - started) * 1000, 1)
+        cards = data.get("top4", data["results"])
         hits = []
-        for card in data["results"]:
+        for card in cards:
             actual = card[field]
             if field == "vendor":
                 hits.append(actual.casefold().startswith(expected.casefold()))
@@ -48,7 +49,7 @@ def evaluate(semantic):
             "sample": sample, "query": query, "target_at_1": bool(hits and hits[0]),
             "hit_at_4": any(hits), "latency_ms": elapsed, "mode": data["search_mode"],
             "catalog_version": data["catalog_version"],
-            "products": [card["name"] for card in data["results"]],
+            "products": [card["name"] for card in cards],
         })
     return rows
 

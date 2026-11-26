@@ -119,9 +119,13 @@ def find_products(q: Annotated[str, Query(min_length=1, max_length=200)], semant
         raise HTTPException(503, "Поиск временно недоступен") from error
     return {
         "results": items,
+        "top4": items + recommendations,
         "alternatives": alternatives,
         "recommendations": recommendations,
-        "clarification": None if items else "Уточните название, бренд или артикул",
+        "clarification": (
+            "Уточните название, бренд или артикул" if not items else
+            "Найдено меньше четырёх подходящих семейств" if len(items) + len(recommendations) < 4 else None
+        ),
         "search_mode": "hybrid" if used_model else "lexical",
         "catalog_version": snapshot,
         "request_id": str(uuid4()),

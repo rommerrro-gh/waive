@@ -37,7 +37,10 @@ SEARCH_OFFERS = """
         o.price, o.currency, o.available, o.attributes, left(o.description, 1200) AS description, c.exact
     FROM candidates c
     JOIN offer o ON o.snapshot_id = %(snapshot)s AND o.id = c.id
-    ORDER BY c.exact DESC, c.rank DESC, o.available DESC, o.id
+    ORDER BY c.exact DESC, row_number() OVER (
+        PARTITION BY o.group_id, CASE WHEN o.group_id IS NULL THEN o.id END
+        ORDER BY c.exact DESC, (o.available AND o.price > 0) DESC NULLS LAST, c.rank DESC, o.id
+    ), c.rank DESC, o.available DESC, o.id
     LIMIT 100
 """
 
@@ -144,20 +147,21 @@ SEMANTIC_OFFERS = """
     ORDER BY n.distance, o.available DESC, o.id
 """
 
-RELATED_OFFERS = """
+COMPLEMENT_CANDIDATES = """
     SELECT id AS offer_id, group_id, category_id, name, vendor, url,
         price, currency, available, attributes, left(description, 1200) AS description
     FROM offer
-    WHERE snapshot_id = %(snapshot)s AND category_id = %(category)s AND available
-        AND id <> ALL(%(excluded)s::text[])
-        AND (%(group)s::text IS NULL OR group_id IS DISTINCT FROM %(group)s::text)
-    ORDER BY (price > 0) DESC NULLS LAST, id
-    LIMIT %(limit)s
+    WHERE snapshot_id = %(snapshot)s AND category_id = %(category)s
+      AND (description ILIKE '%%Платформа:%%' OR attributes ? 'Платформа'
+           OR attributes ? 'Совместимая архитектура/платформа')
+    ORDER BY (available AND price > 0) DESC NULLS LAST, available DESC, id
+    LIMIT 1200
 """
 
 RECOMMENDATIONS = {
-    "1145": ("650", "Защита компьютеров, на которых используется офисное ПО"),
-    "86563": ("1033", "Резервное копирование данных серверной инфраструктуры"),
+    "1145": ("650", "Защита рабочих станций"),
+    "222323": ("650", "Защита рабочих станций"),
+    **dict.fromkeys(SERVER_CATEGORIES, ("1033", "Резервное копирование серверов")),
 }
 
 
@@ -280,10 +284,11 @@ def as_card(item, reason):
     attributes = dict(item["attributes"])
     for field in unescape(item.get("description") or "").split("•"):
         label, separator, value = field.strip().partition(": ")
-        if separator and label in {"Минимальная покупка", "Платформа"}:
+        if separator and label in {"Минимальная покупка", "Платформа", "Тип клиента", "Тип лицензии"}:
             attributes.setdefault(label, value)
     return {key: value for key, value in {
         **item, "name": unescape(item["name"]), "attributes": attributes,
+        "family_id": family_key(item),
         "price": item["price"] or None, "reason": reason,
     }.items() if key not in {"exact", "description"}}
 
@@ -301,17 +306,102 @@ def matches_product_variant(item, query, versions):
     return True
 
 
-def diversify(candidates):
-    families = set()
-    first, variants = [], []
+def family_key(item):
+    if item.get("group_id"):
+        return "group:" + item["group_id"]
+    return "product:" + normal_form(f'{item.get("vendor", "")} {item["name"]}')
+
+
+def is_priced(item):
+    return item["available"] and item["price"] is not None and item["price"] > 0
+
+
+def select_families(candidates):
+    chosen = {}
     for item in candidates:
-        family = item["group_id"] or item["offer_id"]
-        if item["exact"] or family not in families:
-            first.append(item)
-        else:
-            variants.append(item)
-        families.add(family)
-    return first + variants
+        key = family_key(item)
+        previous = chosen.get(key)
+        if previous is None or (item["exact"], is_priced(item)) > (previous["exact"], is_priced(previous)):
+            chosen[key] = item
+    return sorted(chosen.values(), key=lambda item: (item["exact"], is_priced(item)), reverse=True)
+
+
+def platform_labels(value):
+    labels = re.findall(
+        r"windows(?:\s+server(?:\s+20\d{2})?|\s+(?:10|11))?|"
+        r"astra linux|alt linux|ubuntu|debian|centos|red hat enterprise linux|"
+        r"linux|(?:apple )?mac ?os(?: x)?|android|ios|freebsd|vmware esxi",
+        normal_form(value),
+    )
+    return {re.sub(r"^(?:apple )?mac ?os(?: x)?$", "macos", label) for label in labels}
+
+
+def platform_values(card):
+    fields = ("Платформа", "Совместимая архитектура/платформа", "Поддерживаемые ОС")
+    labels = set()
+    for field in fields:
+        labels.update(platform_labels(card["attributes"].get(field) or ""))
+    return labels
+
+
+def buyer_type(card):
+    value = normal_form(card["attributes"].get("Тип клиента") or "")
+    return value if value in {"физлицо", "юрлицо"} else None
+
+
+def compatibility(anchor, offer, query, category):
+    license_type = offer["attributes"].get("Тип лицензии") or ""
+    if re.search(r"продлен|обновлен|renewal|upgrade", normal_form(offer["name"] + " " + license_type)):
+        return None
+    required = platform_labels(query) or platform_values(anchor)
+    shared = required & platform_values(offer)
+    if anchor["category_id"] in SERVER_CATEGORIES:
+        shared = {label for label in shared if label.startswith("windows server")
+                  or label in {"astra linux", "alt linux", "ubuntu", "debian", "centos",
+                               "red hat enterprise linux", "linux", "freebsd", "vmware esxi"}}
+    elif category == "650" and not re.search(
+        r"endpoint|workstation|desktop|для (?:рабочих станций|компьютеров|офиса)|small office",
+        offer["name"], re.IGNORECASE,
+    ):
+        return None
+    source_buyer, target_buyer = buyer_type(anchor), buyer_type(offer)
+    if not shared or (source_buyer and target_buyer and source_buyer != target_buyer):
+        return None
+    return {
+        "matched_platforms": sorted(shared),
+        "source_offer_id": anchor["offer_id"],
+        "buyer_type_checked": bool(source_buyer and target_buyer),
+    }
+
+
+def fill_recommendations(connection, snapshot, query, results):
+    if not results or len(results) >= 4:
+        return []
+    anchor = results[0]
+    rule = RECOMMENDATIONS.get(anchor["category_id"])
+    if not rule or not (platform_labels(query) or platform_values(anchor)):
+        return []
+    target, reason = rule
+    taken = {card["family_id"] for card in results}
+    rows = connection.execute(COMPLEMENT_CANDIDATES, {
+        "snapshot": snapshot, "category": target,
+    })
+    recommendations = []
+    for row in rows:
+        card = as_card(row, reason)
+        if card["family_id"] in taken:
+            continue
+        proof = compatibility(anchor, card, query, target)
+        if proof is None:
+            continue
+        card["reason"] = reason + ". Совпадение платформы: " + ", ".join(proof["matched_platforms"])
+        card["compatibility"] = proof
+        card["match_type"] = "recommendation"
+        recommendations.append(card)
+        taken.add(card["family_id"])
+        if len(results) + len(recommendations) == 4:
+            break
+    return recommendations
 
 
 def assemble_results(connection, snapshot, query, lexical, semantic):
@@ -325,29 +415,14 @@ def assemble_results(connection, snapshot, query, lexical, semantic):
         preferred = [item for item in matching if item["exact"] or item["category_id"] in categories]
         if preferred:
             matching = preferred
-    if (natural_language or categories) and not versions:
-        matching = diversify(matching)
     lexical_ids = {item["offer_id"] for item in lexical}
     results = [as_card(item, "Совпадение артикула или ID" if item["exact"] else (
         "Совпадение по каталогу" if item["offer_id"] in lexical_ids else "Похожее назначение продукта"
-    )) for item in matching[:4]]
-    if not results:
-        return results, [], []
-    top = results[0]
-    category = top["category_id"]
-    params = {"snapshot": snapshot, "category": category,
-              "excluded": [item["offer_id"] for item in results], "group": top["group_id"]}
-    alternatives = []
-    if len(results) < 4 and category:
-        rows = connection.execute(RELATED_OFFERS, {**params, "limit": 4 - len(results)}).fetchall()
-        alternatives = [as_card(row, "Другое семейство в той же категории") for row in rows]
-    rule = RECOMMENDATIONS.get(category)
-    recommendations = []
-    if rule:
-        target, reason = rule
-        rows = connection.execute(RELATED_OFFERS, {**params, "category": target, "limit": 2}).fetchall()
-        recommendations = [as_card(row, reason) for row in rows]
-    return results, alternatives, recommendations
+    )) for item in select_families(matching)[:4]]
+    for card in results:
+        card["match_type"] = "direct"
+    recommendations = fill_recommendations(connection, snapshot, query, results)
+    return results, [], recommendations
 
 
 SUGGEST_FAMILIES = """

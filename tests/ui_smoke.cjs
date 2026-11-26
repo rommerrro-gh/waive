@@ -26,7 +26,10 @@ async function main() {
     const selectedName = await page.locator("#" + active).textContent();
     await input.press("Enter");
     assert.equal(await input.inputValue(), selectedName);
-    await page.locator("#results article").nth(1).waitFor();
+    await page.locator("#results article").first().waitFor();
+    await input.fill("антивирус для рабочих станций компании");
+    await page.getByRole("button", { name: "Найти" }).click();
+    await page.locator("#results article").nth(2).waitFor();
     const buttons = page.locator("#results .compare-toggle");
     await buttons.nth(0).click();
     assert.equal(await page.locator("#open-comparison").isDisabled(), true);

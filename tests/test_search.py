@@ -1,8 +1,8 @@
 import unittest
 
 from app.search import (
-    as_card, diversify, matches_product_variant, matching_version, merge_candidates,
-    one_edit_title, preferred_categories,
+    as_card, compatibility, fill_recommendations, matches_product_variant, matching_version, merge_candidates,
+    one_edit_title, preferred_categories, select_families,
 )
 
 
@@ -60,13 +60,6 @@ class IntentTests(unittest.TestCase):
             with self.subTest(query=query):
                 self.assertEqual(preferred_categories(query), categories)
 
-    def test_diversify_fills_from_other_families_before_variants(self):
-        variants = [
-            {"offer_id": index, "group_id": family, "exact": exact}
-            for index, family, exact in [(10, "a", True), (11, "a", False),
-                                          (12, "b", False), (13, None, False)]
-        ]
-        self.assertEqual([item["offer_id"] for item in diversify(variants)], [10, 12, 13, 11])
 
 class TypoTests(unittest.TestCase):
     def test_common_one_character_typos_in_full_titles(self):
@@ -79,3 +72,47 @@ class TypoTests(unittest.TestCase):
         self.assertFalse(one_edit_title("Сервер Pro 2023", "Сервер Pro 2024"))
         self.assertFalse(one_edit_title("Product 501", "Product 510"))
         self.assertFalse(one_edit_title("Office Suite", "Antivirus Suite"))
+
+class FamilyOutputTests(unittest.TestCase):
+    def test_priced_variant_preferred_and_exact_sku_preserved(self):
+        rows = [
+            {"offer_id": "zero", "group_id": "a", "price": 0, "available": True, "exact": False},
+            {"offer_id": "exact", "group_id": "b", "price": None, "available": False, "exact": True},
+            {"offer_id": "priced", "group_id": "a", "price": 200, "available": True, "exact": False},
+            {"offer_id": "other", "group_id": "c", "price": 50, "available": False, "exact": False},
+        ]
+        self.assertEqual([r["offer_id"] for r in select_families(rows)], ["exact", "priced", "other"])
+
+    def test_identical_ungrouped_hardware_does_not_repeat(self):
+        first = {"offer_id": "10", "group_id": None, "name": "Rack Server", "vendor": "DEPO",
+                 "price": 90, "available": True, "exact": False}
+        second = {**first, "offer_id": "11"}
+        self.assertEqual(select_families([first, second]), [first])
+
+    @staticmethod
+    def card(identifier, category, platform, buyer="юрлицо"):
+        return {"offer_id": identifier, "category_id": category, "group_id": identifier,
+                "family_id": "group:" + identifier, "name": "Endpoint Protection",
+                "available": True, "price": 100,
+                "attributes": {"Платформа": platform, "Тип клиента": buyer}}
+
+    def test_upsell_uses_catalog_platform_and_checks_buyer_type(self):
+        office = self.card("office", "1145", "Windows 11")
+        valid = self.card("valid", "650", "Windows 10/Windows 11")
+        self.assertEqual(compatibility(office, valid, "", "650")["matched_platforms"], ["windows 11"])
+        self.assertIsNone(compatibility(office, self.card("old", "650", "Windows 10"), "", "650"))
+        self.assertIsNone(compatibility(office, self.card("blank", "650", ""), "", "650"))
+        self.assertIsNone(compatibility(office, self.card("home", "650", "Windows 11", "физлицо"), "", "650"))
+        self.assertIsNone(compatibility(office, {**valid, "name": "Mail Server Security"}, "", "650"))
+
+    def test_verified_doprodazhi_fill_only_remaining_slots(self):
+        from unittest.mock import Mock
+        office = self.card("office", "1145", "Windows")
+        second = self.card("another", "1145", "Windows")
+        unverified = self.card("invalid", "650", "")
+        verified = [self.card(f"ok-{i}", "650", "Windows") for i in range(3)]
+        connection = Mock()
+        connection.execute.return_value = iter([unverified, verified[0], verified[0], *verified[1:]])
+        results = fill_recommendations(connection, 1, "", [office, second])
+        self.assertEqual([item["offer_id"] for item in results], ["ok-0", "ok-1"])
+        self.assertTrue(all(item["compatibility"]["matched_platforms"] for item in results))

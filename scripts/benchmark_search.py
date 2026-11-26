@@ -98,11 +98,23 @@ def search(origin, semantic, query):
     except (OSError, ValueError) as error:
         return {"error": getattr(error, "code", None) or type(error).__name__,
                 "mode": None, "latency_ms": None, "items": []}
+    cards = data.get("top4", data["results"])[:4]
+    family_keys = {item.get("family_id") or (
+        ("group", item["group_id"]) if item.get("group_id") else
+        ("product", item.get("vendor", ""), item["name"].casefold())
+    ) for item in cards}
+    recommendations = [item for item in cards if item.get("match_type") == "recommendation"]
     return {
         "error": None, "mode": data["search_mode"], "snapshot": data["catalog_version"],
+        "four_families": len(cards) == len(family_keys) == 4,
+        "duplicate_families": len(cards) != len(family_keys),
+        "recommendations": len(recommendations),
+        "recommendations_checked": sum(
+            bool(item.get("compatibility", {}).get("matched_platforms")) for item in recommendations
+        ),
         "latency_ms": round((time.monotonic() - started) * 1000, 2),
         "items": [{key: item.get(key) for key in ("offer_id", "group_id", "category_id", "vendor", "name")}
-                  for item in data["results"][:4]],
+                  for item in cards],
     }
 
 
@@ -116,6 +128,10 @@ def summary(rows, system):
         "top2": sum(rank is not None and rank <= 2 for rank in ranks),
         "top4": sum(rank is not None for rank in ranks),
         "mrr4": round(sum(1 / rank for rank in ranks if rank is not None) / len(rows), 4) if rows else None,
+        "four_families": sum(item.get("four_families", False) for item in observations),
+        "duplicate_family_queries": sum(item.get("duplicate_families", False) for item in observations),
+        "recommendations": sum(item.get("recommendations", 0) for item in observations),
+        "recommendations_checked": sum(item.get("recommendations_checked", 0) for item in observations),
         "empty": sum(not item["items"] and item["error"] is None for item in observations),
         "errors": sum(item["error"] is not None for item in observations),
         "hybrid_responses": sum(item["mode"] == "hybrid" for item in observations),
