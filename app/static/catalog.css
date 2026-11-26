@@ -218,6 +218,14 @@
   overflow-wrap: anywhere;
 }
 .catalog #query-correction:not([hidden]) + #status { margin-top: .55rem; }
+.catalog #spelling-options {
+  margin-block: 1rem;
+  padding: .85rem;
+  border: 1px solid var(--edge);
+  border-radius: .65rem;
+}
+.catalog #spelling-options h2 { margin-bottom: .5rem; }
+.catalog #spelling-options button { max-width: 100%; overflow-wrap: anywhere; }
 .catalog .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .catalog .result-pagination {
   display: flex;
@@ -319,6 +327,21 @@
 .catalog #approval summary { font-size: 1.1rem; text-wrap: balance; }
 .catalog #approval > .card-actions { flex-direction: column; align-items: stretch; }
 .catalog #quote-text { display: block; margin-bottom: .5rem; }
+.catalog #quote {
+  border-top: 1px solid var(--edge);
+  padding-top: 1rem;
+}
+.catalog #quote-delivery, .catalog #quote-status { color: var(--muted); font-size: .9rem; }
+.catalog #quote-form { display: grid; gap: .55rem; }
+.catalog #quote-form label { margin: 0; }
+.catalog #quote-form input {
+  display: block;
+  width: 100%;
+  margin-top: .25rem;
+  padding: .6rem .65rem;
+}
+.catalog #quote-send { margin-top: .3rem; }
+.catalog #quote-draft summary { margin-block: .7rem; font-size: .9rem; }
 .catalog :is(#alternatives, #recommendations) { margin-block: 1.7rem; }
 .catalog .comparison-content tr.difference { background: var(--wash); }
 .catalog dialog { border-color: var(--edge); }

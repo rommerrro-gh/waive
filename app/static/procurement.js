@@ -10,6 +10,12 @@ const csvButton = document.querySelector("#export-approval");
 const quotePreview = document.querySelector("#quote-preview");
 const quote = document.querySelector("#quote");
 const quoteText = document.querySelector("#quote-text");
+const quoteForm = document.querySelector("#quote-form");
+const quoteSend = document.querySelector("#quote-send");
+const quoteDelivery = document.querySelector("#quote-delivery");
+const quoteStatus = document.querySelector("#quote-status");
+let quoteConfig;
+let quoteOpening = 0;
 const bundle = document.querySelector("#bundle");
 const bundleMessage = document.querySelector("#bundle-message");
 const pageTitle = document.querySelector("#page-title");
@@ -248,8 +254,12 @@ csvButton.addEventListener("click", () => {
     "text/csv;charset=utf-8");
 });
 
-quotePreview.addEventListener("click", () => {
+function quoteBody(contact) {
   const lines = ["Здравствуйте!", "", "Просим подготовить коммерческое предложение по следующим позициям:", ""];
+  if (contact) {
+    lines.push("Имя: " + contact.name, "Компания: " + contact.company, "Почта: " + contact.email,
+      "Телефон: " + contact.phone, "");
+  }
   for (const [index, {item, count, anchor}] of Array.from(saved.values()).entries()) {
     lines.push((index + 1) + ". " + item.name + " (" + positionId(item) + ")");
     if (anchor) lines.push("   Дополнение к «" + anchor + "».");
@@ -263,9 +273,88 @@ quotePreview.addEventListener("click", () => {
     lines.push("");
   }
   lines.push("Пожалуйста, укажите итоговую стоимость с НДС, срок поставки и срок действия предложения.");
-  quoteText.value = lines.join("\n");
+  return lines.join("\n");
+}
+
+function updateQuoteDelivery() {
+  quoteSend.textContent = quoteConfig.automatic_delivery ? "Отправить запрос" : "Открыть письмо";
+  quoteDelivery.textContent = quoteConfig.automatic_delivery
+    ? "Контакты и выбранные позиции будут отправлены на " + quoteConfig.recipient + "."
+    : "Откроем письмо в вашем почтовом приложении. " +
+      (quoteConfig.recipient ? "Проверьте адрес и отправьте письмо." : "Укажите адрес получателя и отправьте письмо.");
+}
+
+quotePreview.addEventListener("click", async () => {
+  const opening = ++quoteOpening;
+  quoteSend.disabled = true;
+  quoteStatus.textContent = "";
+  quoteDelivery.textContent = "Проверяем способ отправки…";
+  quoteText.value = quoteBody();
   quote.hidden = false;
-  quoteText.focus();
+  quoteForm.elements.name.focus();
+  let config;
+  try {
+    const response = await fetch("/quote/config");
+    if (response.ok) config = await response.json();
+  } catch {
+    // На стенде без почтовой настройки запрос можно открыть в своём приложении.
+  }
+  if (opening !== quoteOpening || quote.hidden) return;
+  quoteConfig = config ?? {automatic_delivery: false, recipient: ""};
+  updateQuoteDelivery();
+  quoteSend.disabled = false;
+});
+
+quoteForm.addEventListener("input", event => event.target.setCustomValidity?.(""));
+quoteForm.addEventListener("submit", async event => {
+  event.preventDefault();
+  if (!quoteConfig || !saved.size || quoteSend.disabled) return;
+  const contact = Object.fromEntries(Array.from(new FormData(quoteForm), ([key, value]) => [key, value.trim()]));
+  for (const key of ["name", "company"]) {
+    if (!contact[key]) {
+      quoteForm.elements[key].setCustomValidity("Заполните поле");
+      quoteForm.elements[key].reportValidity();
+      return;
+    }
+  }
+  const digits = contact.phone.replace(/\D/g, "").length;
+  if (!/^\+?[\d() .-]+$/.test(contact.phone) || digits < 7 || digits > 15) {
+    quoteForm.elements.phone.setCustomValidity("Укажите корректный телефон");
+    quoteForm.elements.phone.reportValidity();
+    return;
+  }
+  quoteText.value = quoteBody(contact);
+  if (!quoteConfig.automatic_delivery) {
+    const subject = encodeURIComponent("Запрос коммерческого предложения");
+    const recipient = encodeURIComponent(quoteConfig.recipient).replace("%40", "@");
+    window.location.href = "mailto:" + recipient + "?subject=" + subject +
+      "&body=" + encodeURIComponent(quoteText.value);
+    quoteStatus.textContent = "Запрос подготовлен. Отправьте письмо из почтового приложения.";
+    return;
+  }
+  quoteSend.disabled = true;
+  quoteStatus.textContent = "Отправляем запрос…";
+  try {
+    const items = Array.from(saved.values(), ({item, count}) => ({
+      offer_id: item.offer_id, workplaces: Number(count) || null,
+    }));
+    const response = await fetch("/quote/request", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({...contact, items}),
+    });
+    const result = await response.json();
+    if (response.status === 502 || response.status === 503) {
+      quoteConfig.automatic_delivery = false;
+      updateQuoteDelivery();
+    }
+    if (!response.ok || !result.sent) throw new Error(typeof result.detail === "string" ? result.detail : "Проверьте контакты и список позиций");
+    quoteStatus.textContent = "Запрос отправлен.";
+    quoteForm.reset();
+  } catch (error) {
+    quoteStatus.textContent = error.message || "Не удалось отправить запрос";
+  } finally {
+    quoteSend.disabled = false;
+  }
 });
 
 document.querySelector("#quote-download").addEventListener("click", () => {

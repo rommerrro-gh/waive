@@ -1,6 +1,8 @@
 const form = document.querySelector("#search");
 const status = document.querySelector("#status");
 const correction = document.querySelector("#query-correction");
+const spellingOptions = document.querySelector("#spelling-options");
+const spellingButtons = spellingOptions.querySelector(".card-actions");
 const results = document.querySelector("#results");
 const pagination = document.querySelector("#result-pagination");
 const progress = document.querySelector("#result-progress");
@@ -351,6 +353,8 @@ form.addEventListener("submit", async (event) => {
   results.replaceChildren();
   pagination.hidden = true;
   correction.hidden = true;
+  spellingOptions.hidden = true;
+  spellingButtons.replaceChildren();
   for (const section of [filterSuggestions, filterDetails]) {
     section.replaceChildren();
     section.hidden = true;
@@ -389,7 +393,11 @@ form.addEventListener("submit", async (event) => {
     showFilters(data);
     correction.hidden = !data.corrected_query;
     correction.textContent = data.corrected_query ? "Запрос распознан как «" + data.corrected_query + "»." : "";
-    status.textContent = data.clarification || "Результаты поиска · " + data.results.length;
+    for (const option of data.spelling_suggestions ?? []) {
+      filterButton(spellingButtons, option, () => acceptSuggestion(option));
+    }
+    spellingOptions.hidden = !spellingButtons.children.length;
+    status.textContent = spellingOptions.hidden ? data.clarification || "Результаты поиска · " + data.results.length : "";
   } catch (error) {
     if (error.name !== "AbortError") status.textContent = "Поиск временно недоступен. Попробуйте ещё раз.";
   }

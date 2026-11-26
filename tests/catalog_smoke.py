@@ -84,6 +84,24 @@ for query in ("", " ", "а", "???", "x" * 201):
 for query in ("", " ", "а", "???", "zqjy939"):
     assert get("/suggest?" + urlencode({"q": query}))["suggestions"] == [], query
 assert get("/search?q=zqjy939")["results"] == []
+typo = "каспрсикй"
+assert "Kaspersky" in get("/suggest?" + urlencode({"q": typo}))["suggestions"]
+repaired = get("/search?" + urlencode({"q": typo}))
+assert repaired["corrected_query"] == "Kaspersky" and repaired["results"]
+assert all("касперского" in card["vendor"].casefold() for card in repaired["results"])
+typo_title = urlencode({"q": "Kaspresky Passwrod Manager"})
+assert "Kaspersky Password Manager" in get("/suggest?" + typo_title)["suggestions"]
+assert get("/search?" + typo_title)["corrected_query"] == "Kaspersky Password Manager"
+weak_brand = get("/search?" + urlencode({"q": "майкрасавт"}))
+assert weak_brand["corrected_query"] is None and "Microsoft" in weak_brand["spelling_suggestions"]
+
+assert isinstance(get("/quote/config")["automatic_delivery"], bool)
+try:
+    get("/quote/request", {"Content-Type": "application/json"}, b"{}")
+except HTTPError as error:
+    assert error.code == 422
+else:
+    raise AssertionError("Форма КП принята без контактов")
 office = get("/search?" + urlencode({"q": office_id, "semantic": "false"}))
 assert office["results"][0]["offer_id"] == office_id, office
 assert len(office["recommendations"]) > 0, office

@@ -39,6 +39,10 @@ async function main() {
     await page.getByRole("option", {name: "AnyDesk", exact: true}).waitFor();
     await input.clear();
     assert.equal(await input.getAttribute("aria-expanded"), "false");
+    await input.fill("каспрсикй");
+    await page.getByRole("option", {name: "Kaspersky", exact: true}).waitFor();
+    await page.getByRole("button", {name: "Найти", exact: true}).click();
+    await page.getByText("Запрос распознан как «Kaspersky».", {exact: true}).waitFor();
     await input.fill("каспер");
     await page.getByRole("option", {name: "Kaspersky", exact: true}).waitFor();
     await input.press("ArrowDown");
@@ -127,7 +131,11 @@ async function main() {
     await page.getByRole("button", {name: "Найти"}).click();
     const first = page.locator("#results article").first();
     await first.getByRole("button", {name: "На согласование"}).click();
-    await page.getByRole("button", {name: "Черновик запроса КП"}).click();
+    await page.getByRole("button", {name: "Запросить КП"}).click();
+    await page.getByRole("button", {name: "Открыть письмо"}).waitFor();
+    assert.equal(await page.locator("#quote-form input:required").count(), 4);
+    assert.equal(await page.locator("#quote-form").evaluate(form => form.checkValidity()), false);
+    await page.getByText("Посмотреть запрос", {exact: true}).click();
     assert.match(await page.locator("#quote-text").inputValue(), /покрытие 50 рабочих мест/);
     for (const [button, expected, content] of [
       ["Скачать CSV", "waive-approval.csv", /"Рабочие места".*"50"/s],
@@ -139,6 +147,23 @@ async function main() {
       assert.equal(result.suggestedFilename(), expected);
       assert.match(await readFile(await result.path(), "utf8"), content);
     }
+    await page.route("**/quote/config", route => route.fulfill({json: {
+      automatic_delivery: true, recipient: "sales@example.test",
+    }}));
+    let sent;
+    await page.route("**/quote/request", route => {
+      sent = route.request().postDataJSON();
+      return route.fulfill({json: {sent: true}});
+    });
+    await page.getByRole("button", {name: "Запросить КП"}).click();
+    await page.getByLabel("Имя", {exact: true}).fill("Анна");
+    await page.getByLabel("Почта", {exact: true}).fill("anna@example.test");
+    await page.getByLabel("Телефон", {exact: true}).fill("+7 999 123 45 67");
+    await page.getByLabel("Компания", {exact: true}).fill("Тестовая компания");
+    await page.getByRole("button", {name: "Отправить запрос", exact: true}).click();
+    await page.getByText("Запрос отправлен.", {exact: true}).waitFor();
+    assert.equal(sent.items[0].workplaces, 50);
+    assert.equal(sent.email, "anna@example.test");
     await filters.click();
     await page.locator("select[name=platform]").selectOption("linux");
     await input.fill("офисный пакет");

@@ -1,4 +1,5 @@
 import unittest
+from app.spelling import clear_winner, rank_spellings
 
 from app.search import (
     as_card, compatibility, fill_recommendations, is_kaspersky_query, matches_product_variant, matching_version, merge_candidates,
@@ -62,6 +63,15 @@ class IntentTests(unittest.TestCase):
 
 
 class TypoTests(unittest.TestCase):
+    def test_multiple_edits_and_ambiguity(self):
+        ranked = rank_spellings("каспрсикй", [("Kaspersky", "касперский"), ("Cactus", "кактус")])
+        self.assertEqual([label for _, label in ranked], ["Kaspersky"])
+        self.assertTrue(clear_winner(ranked))
+        ambiguous = rank_spellings("office zuite", [("Office Suite", "office suite"), ("Office Quite", "office quite")])
+        self.assertEqual(len(ambiguous), 2)
+        self.assertFalse(clear_winner(ambiguous))
+        self.assertEqual(rank_spellings("криптопр csp 5.0", [("КриптоПро CSP 4.0", "КриптоПро CSP 4.0")]), [])
+
     def test_common_one_character_typos_in_full_titles(self):
         for incorrect in ("Prgo Suite 2024", "Pro Sutite 2024", "Pro Sute 2024", "Pro Suize 2024"):
             expected = "Prog Suite 2024" if incorrect.startswith("Prgo") else "Pro Suite 2024"

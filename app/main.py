@@ -17,11 +17,13 @@ from psycopg_pool import ConnectionPool, PoolTimeout
 
 from app.analytics import configured, record_search, router
 from app.procurement import LICENSE_TYPES, PLATFORMS, purchase_values, requested_filters
+from app.quote import router as quote_router
 from app.embeddings import vector_literal, vectors
 from app.search import (
     BRAND_BY_NAME, SEMANTIC_OFFERS, as_card, assemble_results, catalog_identifier, fill_recommendations,
-    is_kaspersky_query, lexical_candidates, resolve_search_input, suggest_families,
+    is_kaspersky_query, lexical_candidates, resolve_search_input, spelling_options, suggest_families,
 )
+from app.spelling import clear_winner
 
 logger = logging.getLogger(__name__)
 inference_slots = BoundedSemaphore(4)
@@ -66,6 +68,7 @@ async def lifespan(app):
 
 app = FastAPI(title="Waive", lifespan=lifespan)
 app.include_router(router)
+app.include_router(quote_router)
 
 
 @app.get("/health")
@@ -94,6 +97,10 @@ def suggest(q: Annotated[str, Query(max_length=120)]):
         with app.state.pool.connection() as connection:
             active = connection.execute("SELECT snapshot_id FROM active_catalog").fetchone()
             items = suggest_families(connection, active["snapshot_id"], query) if active else []
+            if active and not items:
+                snapshot = active["snapshot_id"]
+                options = spelling_options(connection, snapshot, query)
+                items = [label for _, label in options if suggest_families(connection, snapshot, label)]
     except (OperationalError, PoolTimeout, QueryCanceled) as error:
         raise HTTPException(503, "Подсказки временно недоступны") from error
     return {"suggestions": items}
@@ -125,8 +132,7 @@ def find_products(
     }.items() if value is not None}
     diagnostics = {}
     lookup = resolve_search_input(query)
-    corrected = lookup.casefold() != query.casefold()
-    brand_only = is_kaspersky_query(lookup) or (corrected and lookup.casefold() in BRAND_BY_NAME)
+    spellings = []
     request_id = uuid4()
     track = track and configured()
     try:
@@ -135,14 +141,31 @@ def find_products(
             if not active:
                 raise HTTPException(503, "Каталог готовится")
             snapshot = active["snapshot_id"]
+            lexical = lexical_candidates(connection, snapshot, lookup, allow_fuzzy=False)
+            if not lexical and lookup.casefold() == query.casefold():
+                prefix = query.casefold()
+                completions = [name for name in suggest_families(connection, snapshot, query)
+                               if len(prefix) >= 4 and name.casefold().startswith(prefix)]
+                ranked = [(0, name) for name in completions] or spelling_options(connection, snapshot, query)
+                confirmed = [
+                    (score, label, candidates)
+                    for score, label in ranked
+                    if (candidates := lexical_candidates(connection, snapshot, label, allow_fuzzy=False))
+                ]
+                if clear_winner([(score, label) for score, label, _ in confirmed]):
+                    _, lookup, lexical = confirmed[0]
+                else:
+                    spellings = [label for _, label, _ in confirmed]
+            corrected = lookup.casefold() != query.casefold()
+            brand_only = is_kaspersky_query(lookup) or (corrected and lookup.casefold() in BRAND_BY_NAME)
             revision = os.environ.get("MODEL_REVISION")
             indexed = None
-            if semantic and not brand_only and not catalog_identifier(query) and revision and os.environ.get("EMBEDDING_URL"):
+            allow_semantic = not spellings and (lexical or len(query.split()) >= 3)
+            if semantic and allow_semantic and not brand_only and not catalog_identifier(query) and revision and os.environ.get("EMBEDDING_URL"):
                 indexed = connection.execute("""
                     SELECT 1 FROM semantic_catalog WHERE snapshot_id = %s AND model_revision = %s
                 """, (snapshot, revision)).fetchone()
             future = request_vector(app.state.executor, lookup) if indexed else None
-            lexical = lexical_candidates(connection, snapshot, lookup)
             semantic_rows, used_model = semantic_candidates(connection, future, snapshot, revision)
             items, alternatives, recommendations = assemble_results(
                 connection, snapshot, lookup, lexical, semantic_rows, filters, diagnostics, expanded=expanded,
@@ -161,6 +184,7 @@ def find_products(
         "applied_filters": filters,
         "suggested_filters": requested_filters(query),
         "corrected_query": lookup if corrected else None,
+        "spelling_suggestions": spellings,
         "filter_diagnostics": diagnostics if filters else None,
         "tracked": track,
         "clarification": (

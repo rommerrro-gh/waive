@@ -2,6 +2,7 @@ import re
 from html import unescape
 
 from app.procurement import CATALOG_FILTERS, catalog_match, filter_offers, purchase_values
+from app.spelling import clear_winner, rank_spellings
 
 NORMALIZATIONS = (
     (re.compile(r"\bкрипто[ -]+про\b", re.IGNORECASE), "КриптоПро"),
@@ -285,7 +286,7 @@ def normalize_query(query):
     return query
 
 
-def lexical_candidates(connection, snapshot, query):
+def lexical_candidates(connection, snapshot, query, *, allow_fuzzy=True):
     params = {"snapshot": snapshot, "query": normalize_query(query)}
     if is_kaspersky_query(query):
         candidates = connection.execute(SEARCH_OFFERS, {**params, "query": "Kaspersky"}).fetchall()
@@ -301,7 +302,7 @@ def lexical_candidates(connection, snapshot, query):
             return preferred
     candidates = connection.execute(SEARCH_OFFERS, params).fetchall()
     categories = preferred_categories(query)
-    if not candidates and not categories and 4 <= len(query) <= 110 and len(query.split()) <= 12:
+    if allow_fuzzy and not candidates and not categories and 4 <= len(query) <= 110 and len(query.split()) <= 12:
         candidates = typo_candidates(connection, params)
     if categories and not any(item["category_id"] in categories for item in candidates):
         candidates.extend(connection.execute(CATEGORY_CANDIDATES, {
@@ -554,6 +555,43 @@ SUGGEST_IDENTIFIER = """
     ORDER BY name
     LIMIT 6
 """
+
+SPELLING_OFFERS = """
+    SELECT o.name, o.vendor
+    FROM offer_search s
+    JOIN offer o ON (o.snapshot_id, o.id) = (s.snapshot_id, s.offer_id)
+    WHERE s.snapshot_id = %(snapshot)s AND o.available
+      AND lower(%(query)s) <%% s.name_normalized
+    ORDER BY word_similarity(lower(%(query)s), s.name_normalized) DESC, o.id
+    LIMIT 36
+"""
+
+
+def spelling_options(connection, snapshot, query):
+    if not 4 <= len(query) <= 64 or len(query.split()) > 6 or catalog_identifier(query):
+        return []
+    tokens = query.split()
+    aliases = {**SUGGESTION_ALIASES, "КриптоПро": ("крипто про", "cryptopro")}
+    brand_candidates = []
+    for brand, names in aliases.items():
+        for name in (brand, *names):
+            length = len(name.split())
+            suffix = " ".join(tokens[length:])
+            brand_candidates.append((f"{brand} {suffix}".strip(), f"{name} {suffix}".strip()))
+    brands = rank_spellings(query, brand_candidates)
+    if len(tokens) == 1 and clear_winner(brands):
+        return brands
+
+    params = {"snapshot": snapshot, "query": query}
+    families = connection.execute(NEARBY_FAMILIES, params).fetchall()
+    # Изменённый порог действует только для выборки кандидатов внутри откатываемой транзакции.
+    with connection.transaction(force_rollback=True):
+        connection.execute("SELECT set_config('pg_trgm.word_similarity_threshold', '0.35', true)")
+        offers = connection.execute(SPELLING_OFFERS, params).fetchall()
+    names = {unescape(row["name"]) for row in (*families, *offers)}
+    names.update(unescape(row["vendor"]) for row in offers if row["vendor"])
+    candidates = [(name, name) for name in names if 4 <= len(name) <= 90 and name.casefold() != query.casefold()]
+    return rank_spellings(query, [*brand_candidates, *candidates])
 
 
 def catalog_identifier(query):

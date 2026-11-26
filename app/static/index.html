@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Waive | Поиск по каталогу</title>
   <link rel="stylesheet" href="/style.css">
-  <link rel="stylesheet" href="/catalog.css?v=5">
-  <script src="/search.js?v=7" defer></script>
-  <script src="/procurement.js?v=2" defer></script>
+  <link rel="stylesheet" href="/catalog.css?v=6">
+  <script src="/search.js?v=8" defer></script>
+  <script src="/procurement.js?v=3" defer></script>
 </head>
 <body class="catalog" data-view="search">
   <header class="site-header catalog-shell">
@@ -104,6 +104,10 @@
           <button id="open-comparison" type="button" disabled>Сравнить предложения</button>
         </section>
         <p id="query-correction" role="status" hidden></p>
+        <section id="spelling-options" aria-labelledby="spelling-title" hidden>
+          <h2 id="spelling-title">Возможно, вы имели в виду</h2>
+          <div class="card-actions"></div>
+        </section>
         <p id="status" role="status"></p>
         <div id="filter-details" class="card-actions" hidden></div>
         <section id="results" class="cards" aria-label="Результаты поиска"></section>
@@ -125,13 +129,26 @@
           <p id="approval-empty">Добавьте предложения из поиска или комплекта.</p>
           <ul id="approval-items"></ul>
           <div class="card-actions">
-            <button id="quote-preview" type="button" disabled>Черновик запроса КП</button>
+            <button id="quote-preview" type="button" disabled>Запросить КП</button>
             <button id="export-approval" type="button" class="secondary" disabled>Скачать CSV</button>
           </div>
-          <section id="quote" hidden>
-            <label for="quote-text">Текст запроса коммерческого предложения</label>
-            <textarea id="quote-text" rows="12"></textarea>
-            <button id="quote-download" type="button" class="secondary">Скачать черновик TXT</button>
+          <section id="quote" aria-labelledby="quote-title" hidden>
+            <h2 id="quote-title">Контакты для ответа на запрос КП</h2>
+            <p id="quote-delivery"></p>
+            <form id="quote-form">
+              <label>Имя <input name="name" autocomplete="name" maxlength="120" required></label>
+              <label>Почта <input type="email" name="email" autocomplete="email" maxlength="254" required></label>
+              <label>Телефон <input type="tel" name="phone" autocomplete="tel" maxlength="30" required></label>
+              <label>Компания <input name="company" autocomplete="organization" maxlength="120" required></label>
+              <button id="quote-send" type="submit" disabled>Отправить запрос</button>
+            </form>
+            <p id="quote-status" role="status"></p>
+            <details id="quote-draft">
+              <summary>Посмотреть запрос</summary>
+              <label for="quote-text">Текст запроса коммерческого предложения</label>
+              <textarea id="quote-text" rows="9" readonly></textarea>
+              <button id="quote-download" type="button" class="secondary">Скачать черновик TXT</button>
+            </details>
           </section>
         </details>
       </aside>
