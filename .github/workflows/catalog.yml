@@ -1,98 +1,33 @@
-name: Проверка каталога
-on: [push, pull_request]
+name: Проверка доступа к поиску Softline
+on:
+  push:
+    branches: [probe/softline-search]
 permissions:
   contents: read
 jobs:
-  smoke:
+  probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      POSTGRES_PASSWORD: waive-ci
-      DATABASE_URL: postgresql://waive:waive-ci@db:5432/waive
+    timeout-minutes: 2
     steps:
-      - uses: actions/checkout@v4
-      - name: Проверить форматирование JavaScript и поисковую логику
+      - name: Выполнить один публичный поисковый запрос
         run: |
-          node --check app/static/search.js
-          python3 -m unittest discover -s tests
-      - name: Загрузить реальный каталог
-        run: |
-          docker compose up -d --wait db
-          docker compose run --rm api alembic upgrade head
-          docker compose run --rm api python -m app.import_catalog /catalog/Mindbox.xml.gz
-          docker compose run --rm api python -m app.import_catalog /catalog/Mindbox.xml.gz
-          docker compose up -d api
-      - name: Проверить API и данные
-        run: |
-          curl --fail --retry 20 --retry-all-errors --retry-delay 1 http://127.0.0.1:8000/ready
-          docker compose exec -T api python - < tests/catalog_smoke.py
-      - name: Диагностика
-        if: failure()
-        run: docker compose logs
-  semantic:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      POSTGRES_PASSWORD: waive-ci
-      DATABASE_URL: postgresql://waive:waive-ci@db:5432/waive
-      MODEL_REVISION: fd1525a9fd15316a2d503bf26ab031a61d056e98
-      TORCH_THREADS: "4"
-      COMPOSE_FILE: compose.yaml:compose.semantic.yaml
-    steps:
-      - uses: actions/checkout@v4
-      - name: Подготовить каталог и базу
-        run: |
-          docker compose up -d --wait db
-          docker compose run --rm api alembic upgrade head
-          docker compose run --rm api python -m app.import_catalog /catalog/Mindbox.xml.gz
-      - name: Скачать и запустить E5-small
-        run: |
-          docker volume create waive-model-cache
-          docker run --rm -e MODEL_REVISION -v waive-model-cache:/models -v "$PWD/inference/download.py:/download.py:ro" python:3.12-slim python /download.py
-          docker compose up -d --build inference api
-          for attempt in $(seq 1 45); do
-            if docker compose exec -T api python -c "import urllib.request; urllib.request.urlopen('http://inference:8001/health', timeout=2)"; then break; fi
-            if [ "$attempt" = "45" ]; then exit 1; fi
-            sleep 2
-          done
-      - name: Проиндексировать каталог и измерить поиск
-        run: |
-          time docker compose run --rm api python -m app.index_semantic
-          docker compose exec -T api python - < tests/semantic_smoke.py
-          docker compose exec -T api python - < scripts/evaluate.py > search-evaluation.jsonl
-          python3 -c 'import json; [print({k: v for k, v in json.loads(line).items() if k != "rows"}) for line in open("search-evaluation.jsonl")]'
-      - name: Разобрать смысловые запросы по этапам
-        run: |
-          docker compose exec -T api sh -c 'cat > /tmp/evaluate.py' < scripts/evaluate.py
-          docker compose exec -T -e PYTHONPATH=/app:/tmp api python - < scripts/diagnose_retrieval.py | tee search-diagnostics.jsonl
-      - name: Измерить задержку под пробной нагрузкой
-        run: |
-          python3 scripts/measure.py --mode lexical --requests 120 --rps 10 | tee search-load.jsonl
-          python3 scripts/measure.py --mode hybrid --requests 120 --rps 10 | tee -a search-load.jsonl
-      - name: Сравнить поиск на расширенной выборке
-        run: |
-          git fetch --no-tags --depth=1 origin eb493e9fd7ff375819a7e6afb03d3ba7f1278846
-          baseline_dir=$(mktemp -d)
-          git archive eb493e9fd7ff375819a7e6afb03d3ba7f1278846 Dockerfile app requirements.txt alembic.ini migrations | tar -x -C "$baseline_dir"
-          docker build -t waive-historical "$baseline_dir"
-          network=$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "$(docker compose ps -q db)")
-          docker run -d --name waive-historical --network "$network" -e DATABASE_URL -p 127.0.0.1:8002:8000 waive-historical
-          curl --fail --retry 12 --retry-all-errors --retry-delay 1 http://127.0.0.1:8002/ready
-          docker compose exec -T db psql -v ON_ERROR_STOP=1 -U waive -d waive -At -F $'\t' -c 'SELECT id, category_id FROM offer JOIN active_catalog ON offer.snapshot_id = active_catalog.snapshot_id' > "$RUNNER_TEMP/current-categories.tsv"
-          python3 scripts/benchmark_search.py --feed organizer-materials/Mindbox.xml.gz --catalog-id-map "$RUNNER_TEMP/current-categories.tsv"
-      - name: Сохранить отчёт о качестве поиска
-        uses: actions/upload-artifact@v4
-        with:
-          name: search-evaluation
-          path: |
-            search-evaluation.jsonl
-            search-load.jsonl
-            search-diagnostics.jsonl
-            search-comparison.json
-      - name: Проверить поиск при отказе модели
-        run: |
-          docker compose stop inference
-          docker compose exec -T api python -c "import json, urllib.request; r=json.load(urllib.request.urlopen('http://127.0.0.1:8000/search?q=anydesk')); assert r['search_mode']=='lexical' and r['results'], r"
-      - name: Диагностика
-        if: failure()
-        run: docker compose logs
+          python3 - <<'PY'
+          import re
+          from urllib.request import Request, urlopen
+          from urllib.error import HTTPError, URLError
+          from html import unescape
+
+          url = "https://store.softline.ru/search/?query=AnyDesk"
+          try:
+              with urlopen(Request(url, headers={"User-Agent": "Waive catalog comparison (single public request)"}), timeout=15) as response:
+                  html = response.read(2000000).decode("utf-8", "replace")
+                  print("HTTP:", response.status, "URL:", response.url, "HTML bytes:", len(html))
+          except (HTTPError, URLError, TimeoutError) as error:
+              print("Доступность:", getattr(error, "code", None), str(error))
+          else:
+              titles = re.findall(r"<(?:title|h1)[^>]*>(.*?)</(?:title|h1)>", html, re.I | re.S)
+              print("Заголовок:", [unescape(re.sub("<[^>]+>", "", item)).strip()[:220] for item in titles[:5]])
+              for line in re.findall(r'<[^<>]{0,300}AnyDesk[^<>]{0,350}>', html, re.I)[:18]:
+                  if "href=" in line or "class=" in line:
+                      print(line[:500])
+          PY
