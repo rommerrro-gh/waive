@@ -31,6 +31,10 @@ async function main() {
     await more.click();
     assert.ok(await cards.count() > firstPage.length);
     assert.deepEqual((await cards.locator("h2").allTextContents()).slice(0, 12), firstPage);
+    await input.fill("касперчкий");
+    await page.getByRole("button", {name: "Найти", exact: true}).click();
+    await page.getByText("Искали по запросу «Kaspersky»", {exact: true}).waitFor();
+    assert.equal(await cards.count(), 12);
     await input.fill("крипто пр");
     await page.getByRole("option", { name: /КриптоПро CSP TLS/i }).waitFor();
     assert.equal(await input.getAttribute("aria-expanded"), "true");

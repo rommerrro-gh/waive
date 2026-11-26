@@ -5,6 +5,7 @@ from app.procurement import CATALOG_FILTERS, catalog_match, filter_offers, purch
 
 NORMALIZATIONS = (
     (re.compile(r"\bкрипто[ -]+про\b", re.IGNORECASE), "КриптоПро"),
+    (re.compile(r"\bкасперск(?:ий|ого|ому|им|ом|и)\b", re.IGNORECASE), "Kaspersky"),
     (re.compile(r"\bантивирь\b", re.IGNORECASE), "антивирус"),
     (re.compile(r"\bвинда\b", re.IGNORECASE), "Windows"),
 )
@@ -12,6 +13,8 @@ REMOTE_CATEGORIES = {"327029", "327030"}
 SERVER_CATEGORIES = {"86563", "87093", "87268", "87276"}
 SERVER_REQUEST = re.compile(r"(?:(?:купить|подобрать)\s+)?сервер(?:ы)?", re.IGNORECASE)
 VERSION = re.compile(r"(?<![\w.])\d+(?:\.\d+)+(?![\w.])")
+KASPERSKY_NAMES = ("kaspersky", "касперский", "касперски")
+KASPERSKY_VENDOR_NAMES = {"лаборатория касперского", "kaspersky", "kaspersky lab"}
 
 SEARCH_OFFERS = """
     WITH input AS MATERIALIZED (
@@ -104,6 +107,13 @@ def one_edit_title(query, title):
     shorter, longer = sorted((query, title), key=len)
     difference = next((i for i, (left, right) in enumerate(zip(shorter, longer)) if left != right), len(shorter))
     return shorter[difference:] == longer[difference + 1:]
+
+
+def is_kaspersky_query(query):
+    name = normal_form(query)
+    if name == "лаборатория касперского" or normalize_query(name) == "Kaspersky":
+        return True
+    return name.isalpha() and any(one_edit_title(name, brand) for brand in KASPERSKY_NAMES)
 
 
 def typo_candidates(connection, params):
@@ -248,6 +258,12 @@ def normalize_query(query):
 
 def lexical_candidates(connection, snapshot, query):
     params = {"snapshot": snapshot, "query": normalize_query(query)}
+    if is_kaspersky_query(query):
+        candidates = connection.execute(SEARCH_OFFERS, {**params, "query": "Kaspersky"}).fetchall()
+        return [
+            item for item in candidates
+            if normal_form(item["vendor"] or "").strip("«»\" ") in KASPERSKY_VENDOR_NAMES
+        ]
     if SERVER_REQUEST.fullmatch(query):
         preferred = connection.execute(CATEGORY_CANDIDATES, {
             "snapshot": snapshot, "categories": sorted(SERVER_CATEGORIES),
@@ -493,6 +509,6 @@ SUGGEST_FAMILIES = """
 
 def suggest_families(connection, snapshot, query):
     rows = connection.execute(SUGGEST_FAMILIES, {
-        "query": normalize_query(query), "snapshot": snapshot,
+        "query": "Kaspersky" if is_kaspersky_query(query) else normalize_query(query), "snapshot": snapshot,
     }).fetchall()
     return [unescape(row["name"]) for row in rows]

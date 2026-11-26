@@ -1,5 +1,6 @@
 const form = document.querySelector("#search");
 const status = document.querySelector("#status");
+const correction = document.querySelector("#query-correction");
 const results = document.querySelector("#results");
 const pagination = document.querySelector("#result-pagination");
 const progress = document.querySelector("#result-progress");
@@ -338,6 +339,7 @@ form.addEventListener("submit", async (event) => {
   resultSet = undefined;
   results.replaceChildren();
   pagination.hidden = true;
+  correction.hidden = true;
   for (const section of [filterSuggestions, filterDetails]) {
     section.replaceChildren();
     section.hidden = true;
@@ -369,6 +371,8 @@ form.addEventListener("submit", async (event) => {
     filterCount.textContent = activeCount ? " · " + activeCount : "";
     filterCount.hidden = !activeCount;
     showFilters(data);
+    correction.hidden = !data.corrected_query;
+    correction.textContent = data.corrected_query ? "Искали по запросу «" + data.corrected_query + "»" : "";
     status.textContent = data.clarification || "Результаты поиска · " + data.results.length;
   } catch (error) {
     if (error.name !== "AbortError") status.textContent = "Поиск временно недоступен. Попробуйте ещё раз.";

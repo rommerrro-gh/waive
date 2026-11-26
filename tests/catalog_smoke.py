@@ -48,6 +48,11 @@ expanded = get("/search?q=Kaspersky&semantic=false&expanded=true")
 assert len(expanded["results"]) > 12, expanded
 assert expanded["results"][:4] == compact["results"] == expanded["top4"]
 assert len({card["family_id"] for card in expanded["results"]}) == len(expanded["results"])
+for query in ("касперский", "касперчкий", "Kaspresky"):
+    repaired = get("/search?" + urlencode({"q": query, "expanded": "true"}))
+    assert repaired["corrected_query"] == "Kaspersky" and repaired["top4"] == expanded["top4"], repaired
+    assert all("касперского" in card["vendor"].casefold() for card in repaired["results"])
+assert get("/suggest?" + urlencode({"q": "касперчкий"}))["suggestions"]
 office = get("/search?" + urlencode({"q": office_id, "semantic": "false"}))
 assert office["results"][0]["offer_id"] == office_id, office
 assert len(office["recommendations"]) > 0, office

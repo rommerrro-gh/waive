@@ -19,7 +19,7 @@ from app.analytics import configured, record_search, router
 from app.procurement import LICENSE_TYPES, PLATFORMS, purchase_values, requested_filters
 from app.embeddings import vector_literal, vectors
 from app.search import (
-    SEMANTIC_OFFERS, as_card, assemble_results, fill_recommendations, lexical_candidates,
+    SEMANTIC_OFFERS, as_card, assemble_results, fill_recommendations, is_kaspersky_query, lexical_candidates,
     suggest_families,
 )
 
@@ -124,6 +124,7 @@ def find_products(
         "in_stock": in_stock or None, "price_min": price_min, "price_max": price_max,
     }.items() if value is not None}
     diagnostics = {}
+    brand_only = is_kaspersky_query(query)
     request_id = uuid4()
     track = track and configured()
     try:
@@ -134,7 +135,7 @@ def find_products(
             snapshot = active["snapshot_id"]
             revision = os.environ.get("MODEL_REVISION")
             indexed = None
-            if semantic and revision and os.environ.get("EMBEDDING_URL"):
+            if semantic and not brand_only and revision and os.environ.get("EMBEDDING_URL"):
                 indexed = connection.execute("""
                     SELECT 1 FROM semantic_catalog WHERE snapshot_id = %s AND model_revision = %s
                 """, (snapshot, revision)).fetchone()
@@ -157,6 +158,7 @@ def find_products(
         "recommendations": recommendations,
         "applied_filters": filters,
         "suggested_filters": requested_filters(query),
+        "corrected_query": "Kaspersky" if brand_only and query.casefold() != "kaspersky" else None,
         "filter_diagnostics": diagnostics if filters else None,
         "tracked": track,
         "clarification": (

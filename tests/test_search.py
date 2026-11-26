@@ -1,7 +1,7 @@
 import unittest
 
 from app.search import (
-    as_card, compatibility, fill_recommendations, matches_product_variant, matching_version, merge_candidates,
+    as_card, compatibility, fill_recommendations, is_kaspersky_query, matches_product_variant, matching_version, merge_candidates,
     one_edit_title, preferred_categories, select_families,
 )
 
@@ -72,6 +72,14 @@ class TypoTests(unittest.TestCase):
         self.assertFalse(one_edit_title("Сервер Pro 2023", "Сервер Pro 2024"))
         self.assertFalse(one_edit_title("Product 501", "Product 510"))
         self.assertFalse(one_edit_title("Office Suite", "Antivirus Suite"))
+
+    def test_short_brand_queries_allow_one_edit_without_capturing_product_queries(self):
+        for query in ("Kaspersky", "Касперский", "Лаборатория Касперского", "касперчкий", "касперсикй", "Kaspresky"):
+            with self.subTest(query=query):
+                self.assertTrue(is_kaspersky_query(query))
+        for query in ("касперчк", "касперский 2024", "Kaspersky Small Office Security", "игровой коврик"):
+            with self.subTest(query=query):
+                self.assertFalse(is_kaspersky_query(query))
 
 class FamilyOutputTests(unittest.TestCase):
     def test_priced_variant_preferred_and_exact_sku_preserved(self):
