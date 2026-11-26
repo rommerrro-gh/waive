@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from threading import BoundedSemaphore
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query
@@ -14,6 +14,8 @@ from psycopg.errors import QueryCanceled
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool, PoolTimeout
 
+from app.analytics import configured, record_search, router
+from app.procurement import LICENSE_TYPES, PLATFORMS, requested_filters
 from app.embeddings import vector_literal, vectors
 from app.search import SEMANTIC_OFFERS, assemble_results, lexical_candidates, suggest_families
 
@@ -59,6 +61,7 @@ async def lifespan(app):
 
 
 app = FastAPI(title="Waive", lifespan=lifespan)
+app.include_router(router)
 
 
 @app.get("/health")
@@ -93,10 +96,24 @@ def suggest(q: Annotated[str, Query(max_length=120)]):
 
 
 @app.get("/search")
-def find_products(q: Annotated[str, Query(min_length=1, max_length=200)], semantic: bool = True):
+def find_products(
+    q: Annotated[str, Query(min_length=1, max_length=200)],
+    semantic: bool = True,
+    platform: Literal[*PLATFORMS] | None = None,
+    term: Annotated[str | None, Query(pattern=r"^(?:[1-9][0-9]?|1[01][0-9]|120|perpetual)$")] = None,
+    license_type: Literal[*LICENSE_TYPES] | None = None,
+    track: bool = False,
+    demo: bool = False,
+):
     query = " ".join(q.split())
     if not query:
         raise HTTPException(422, "Введите поисковый запрос")
+    filters = {key: value for key, value in {
+        "platform": platform, "term": term, "license_type": license_type,
+    }.items() if value is not None}
+    diagnostics = {}
+    request_id = uuid4()
+    track = track and configured()
     try:
         with app.state.pool.connection() as connection, connection.transaction():
             active = connection.execute("SELECT snapshot_id FROM active_catalog").fetchone()
@@ -113,8 +130,10 @@ def find_products(q: Annotated[str, Query(min_length=1, max_length=200)], semant
             lexical = lexical_candidates(connection, snapshot, query)
             semantic_rows, used_model = semantic_candidates(connection, future, snapshot, revision)
             items, alternatives, recommendations = assemble_results(
-                connection, snapshot, query, lexical, semantic_rows
+                connection, snapshot, query, lexical, semantic_rows, filters, diagnostics,
             )
+            if track:
+                track = record_search(connection, request_id, query, filters, diagnostics, items, recommendations, demo)
     except (OperationalError, PoolTimeout, QueryCanceled) as error:
         raise HTTPException(503, "Поиск временно недоступен") from error
     return {
@@ -122,13 +141,18 @@ def find_products(q: Annotated[str, Query(min_length=1, max_length=200)], semant
         "top4": items + recommendations,
         "alternatives": alternatives,
         "recommendations": recommendations,
+        "applied_filters": filters,
+        "suggested_filters": requested_filters(query),
+        "filter_diagnostics": diagnostics if filters else None,
+        "tracked": track,
         "clarification": (
+            "По выбранным условиям подходящие предложения не подтверждены" if filters and not items else
             "Уточните название, бренд или артикул" if not items else
             "Найдено меньше четырёх подходящих семейств" if len(items) + len(recommendations) < 4 else None
         ),
         "search_mode": "hybrid" if used_model else "lexical",
         "catalog_version": snapshot,
-        "request_id": str(uuid4()),
+        "request_id": str(request_id),
     }
 
 

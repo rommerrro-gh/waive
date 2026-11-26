@@ -9,6 +9,7 @@
 </head>
 <body>
   <main>
+    <nav><a href="/analytics.html">Аналитика поиска</a></nav>
     <h1>Поиск по каталогу Softline</h1>
     <form id="search" role="search">
       <label for="query">Название, бренд или артикул</label>
@@ -22,6 +23,42 @@
         <button type="submit">Найти</button>
       </div>
       <label><input id="lexical" type="checkbox"> Только текстовый поиск</label>
+      <fieldset class="purchase-filters">
+        <legend>Условия закупки</legend>
+        <label>Платформа
+          <select name="platform">
+            <option value="">Любая</option>
+            <option value="windows">Windows</option>
+            <option value="windows-server">Windows Server</option>
+            <option value="linux">Linux</option>
+            <option value="astra-linux">Astra Linux</option>
+            <option value="macos">macOS</option>
+          </select>
+        </label>
+        <label>Срок лицензии
+          <select name="term">
+            <option value="">Любой</option>
+            <option value="1">1 месяц</option>
+            <option value="3">3 месяца</option>
+            <option value="6">6 месяцев</option>
+            <option value="12">12 месяцев</option>
+            <option value="24">24 месяца</option>
+            <option value="36">36 месяцев</option>
+            <option value="perpetual">Бессрочная</option>
+          </select>
+        </label>
+        <label>Тип лицензии
+          <select name="license_type">
+            <option value="">Любой</option>
+            <option value="new">Новая лицензия</option>
+            <option value="subscription">Подписка</option>
+            <option value="renewal">Продление</option>
+            <option value="upgrade">Обновление</option>
+          </select>
+        </label>
+      </fieldset>
+      <label class="demo-mode"><input name="demo" type="checkbox" value="true"> Записывать как демо</label>
+      <div id="filter-suggestions" class="card-actions" aria-label="Предложенные фильтры" hidden></div>
     </form>
     <section id="comparison-bar" class="comparison-bar" aria-label="Выбранные предложения" hidden>
       <p id="comparison-count" role="status"></p>
@@ -29,6 +66,7 @@
       <button id="open-comparison" type="button" disabled>Сравнить предложения</button>
     </section>
     <p id="status" role="status"></p>
+    <div id="filter-details" class="card-actions" hidden></div>
     <section id="results" class="cards" aria-label="Результаты поиска"></section>
     <section id="alternatives" hidden><h2>Альтернативы</h2><div class="cards"></div></section>
     <section id="recommendations" hidden><h2>Допродажи с проверкой характеристик</h2><div class="cards"></div></section>

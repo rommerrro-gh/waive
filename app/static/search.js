@@ -40,30 +40,40 @@ function attributeValue(item, ...keys) {
   return null;
 }
 
-function addProductLink(parent, item) {
+function addProductLink(parent, item, requestId) {
   if (/^https?:\/\//i.test(item.url || "")) {
-    addText(parent, "a", "Карточка на Softline").href = item.url;
+    const link = addText(parent, "a", "Карточка на Softline");
+    link.href = item.url;
+    if (requestId) {
+      link.addEventListener("click", () => {
+        fetch("/analytics/events/click", {
+          method: "POST", keepalive: true,
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({request_id: requestId, offer_id: item.offer_id}),
+        }).catch(() => {});
+      });
+    }
   }
 }
 
-function renderSection(id, cards) {
+function renderSection(id, cards, requestId) {
   const section = document.querySelector("#" + id);
   section.hidden = !cards.length;
-  section.querySelector(".cards").replaceChildren(...cards.map(productCard));
+  section.querySelector(".cards").replaceChildren(...cards.map(item => productCard(item, requestId)));
 }
 
-function productCard(item) {
+function productCard(item, requestId) {
   const card = document.createElement("article");
   addText(card, "h2", item.name);
   addText(card, "p", priceLabel(item) + " · " + availabilityLabel(item));
   addText(card, "p", item.reason);
-  for (const key of ["Версия", "Срок действия", "Модель лицензирования", "Тип лицензии", "Минимальная покупка"]) {
+  for (const key of ["Версия", "Срок действия", "Модель лицензирования", "Тип лицензии", "Платформа", "Минимальная покупка"]) {
     const value = attributeValue(item, key);
     if (value) addText(card, "p", key + ": " + value);
   }
   const actions = addText(card, "div", "");
   actions.className = "card-actions";
-  addProductLink(actions, item);
+  addProductLink(actions, item, requestId);
   const button = addText(actions, "button", "");
   button.type = "button";
   button.className = "secondary compare-toggle";
@@ -139,6 +149,47 @@ openComparison.addEventListener("click", () => {
   comparison.showModal();
 });
 
+const filterNames = {platform: "платформа", term: "срок лицензии", license_type: "тип лицензии"};
+const filterSuggestions = document.querySelector("#filter-suggestions");
+const filterDetails = document.querySelector("#filter-details");
+
+function filterButton(parent, label, action) {
+  const button = addText(parent, "button", label);
+  button.type = "button";
+  button.className = "secondary";
+  button.addEventListener("click", action);
+}
+
+function showFilters(data) {
+  for (const [key, value] of Object.entries(data.suggested_filters)) {
+    const select = form.elements[key];
+    if (select.value) continue;
+    const option = Array.from(select.options).find(option => option.value === value);
+    const label = option?.textContent || value + " мес.";
+    filterButton(filterSuggestions, "Применить: " + label, () => {
+      if (!option) select.add(new Option(label, value));
+      select.value = value;
+      form.requestSubmit();
+    });
+  }
+  filterSuggestions.hidden = !filterSuggestions.children.length;
+  if (!data.filter_diagnostics || data.results.length >= 4) return;
+  const entries = Object.entries(data.filter_diagnostics.conditions)
+    .filter(([, counts]) => counts.would_restore > 0);
+  for (const [key, counts] of entries) {
+    const note = counts.unverified ? " · без подтверждения: " + counts.unverified : "";
+    addText(filterDetails, "p", filterNames[key] + " исключает семейств: " + counts.would_restore + note);
+    filterButton(filterDetails, "Снять условие «" + filterNames[key] + "»", () => {
+      form.elements[key].value = "";
+      form.requestSubmit();
+    });
+  }
+  if (!entries.length && data.filter_diagnostics.families_before > data.filter_diagnostics.families_after) {
+    addText(filterDetails, "p", "Сочетание условий сузило выдачу. Попробуйте ослабить несколько фильтров.");
+  }
+  filterDetails.hidden = !filterDetails.children.length;
+}
+
 function closeSuggestions() {
   clearTimeout(suggestionTimer);
   activeSuggestion?.abort();
@@ -212,19 +263,27 @@ form.addEventListener("submit", async (event) => {
   const controller = new AbortController();
   activeSearch = controller;
   results.replaceChildren();
+  for (const section of [filterSuggestions, filterDetails]) {
+    section.replaceChildren();
+    section.hidden = true;
+  }
   renderSection("alternatives", []);
   renderSection("recommendations", []);
   status.textContent = "Ищем товары…";
   const params = new URLSearchParams(new FormData(form));
+  for (const key of Object.keys(filterNames)) if (!params.get(key)) params.delete(key);
+  params.set("track", "true");
   if (document.querySelector("#lexical").checked) params.set("semantic", "false");
   try {
     const response = await fetch("/search?" + params, { signal: controller.signal });
     if (!response.ok) throw new Error("Поиск недоступен");
     const data = await response.json();
     if (controller.signal.aborted) return;
-    results.replaceChildren(...data.results.map(productCard));
+    const requestId = data.tracked ? data.request_id : undefined;
+    results.replaceChildren(...data.results.map(item => productCard(item, requestId)));
     renderSection("alternatives", data.alternatives);
-    renderSection("recommendations", data.recommendations);
+    renderSection("recommendations", data.recommendations, requestId);
+    showFilters(data);
     status.textContent = data.clarification || (data.search_mode === "hybrid" ?
       "Результаты поиска по тексту и смыслу" : "Результаты текстового поиска");
   } catch (error) {

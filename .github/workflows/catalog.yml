@@ -8,12 +8,14 @@ jobs:
     timeout-minutes: 15
     env:
       POSTGRES_PASSWORD: waive-ci
+      ANALYTICS_TOKEN: waive-ci-analytics
       DATABASE_URL: postgresql://waive:waive-ci@db:5432/waive
     steps:
       - uses: actions/checkout@v4
       - name: Проверить форматирование JavaScript и поисковую логику
         run: |
           node --check app/static/search.js
+          node --check app/static/analytics.js
           python3 -m unittest discover -s tests
       - name: Загрузить реальный каталог
         run: |

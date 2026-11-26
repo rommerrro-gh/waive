@@ -1,15 +1,17 @@
 import os
 import re
 from urllib.parse import urlencode
-from urllib.request import urlopen
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 import json
 
 import psycopg
 
 
-def get(path):
-    with urlopen("http://127.0.0.1:8000" + path, timeout=5) as response:
-        return json.load(response)
+def get(path, headers=None, body=None):
+    request = Request("http://127.0.0.1:8000" + path, headers=headers or {}, data=body)
+    with urlopen(request, timeout=5) as response:
+        return response.status if response.status == 204 else json.load(response)
 
 
 with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
@@ -46,3 +48,36 @@ assert len(office["recommendations"]) > 0, office
 assert len({item["family_id"] for item in office["top4"]}) == len(office["top4"]), office
 assert all(item["compatibility"]["matched_platforms"] for item in office["recommendations"]), office
 print("Полный каталог, разные семейства и допродажи с совпадением платформы проверены")
+
+
+from app.procurement import purchase_values
+
+query = "антивирус для рабочих станций компании"
+matched = get("/search?" + urlencode({
+    "q": query, "platform": "windows", "term": "12", "track": "true", "demo": "true",
+}))
+assert matched["results"], matched
+for item in matched["results"]:
+    values = purchase_values(item["attributes"])
+    assert "windows" in values["platform"] and "12" in values["term"], item
+miss = get("/search?" + urlencode({"q": query, "term": "119", "track": "true", "demo": "true"}))
+assert not miss["results"], miss
+assert miss["filter_diagnostics"]["conditions"]["term"]["would_restore"] > 0, miss
+
+assert get("/analytics/events/click", {"Content-Type": "application/json"}, json.dumps({
+    "request_id": matched["request_id"], "offer_id": matched["results"][0]["offer_id"],
+}).encode()) == 204
+try:
+    get("/analytics/report")
+except HTTPError as error:
+    assert error.code == 403
+else:
+    raise AssertionError("Отчёт доступен без ключа")
+
+headers = {"X-Analytics-Token": os.environ["ANALYTICS_TOKEN"]}
+report = get("/analytics/report?demo=true", headers)
+assert report["metrics"]["searches"] == 2 and report["metrics"]["empty"] == 1, report
+assert report["metrics"]["direct_clicks"] == 1, report
+assert any(row["reason"] == "filter.term" for row in report["groups"]), report
+assert get("/analytics/report", headers)["metrics"]["searches"] == 0
+print("Проверены закупочные условия, причины промахов и отдельная статистика демо")

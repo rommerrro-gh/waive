@@ -11,7 +11,7 @@ async function main() {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     page.on("pageerror", error => { throw error; });
     await page.goto("http://127.0.0.1:8000/");
-    const input = page.getByRole("combobox");
+    const input = page.getByRole("combobox", {name: "Название, бренд или артикул"});
     await input.fill("крипто пр");
     await page.getByRole("option", { name: /КриптоПро CSP TLS/i }).waitFor();
     assert.equal(await input.getAttribute("aria-expanded"), "true");
@@ -50,7 +50,18 @@ async function main() {
     assert.deepEqual(await page.locator("#comparison-items span").allTextContents(), chosen);
     await page.locator("#comparison-items button").first().click();
     assert.equal(await page.locator("#open-comparison").isDisabled(), true);
-    console.log("Проверены подсказки, клавиатура, две карточки и сохранение выбора между запросами");
+    await input.fill("антивирус для рабочих станций на год");
+    await page.locator("input[name=demo]").check();
+    await page.getByRole("button", { name: "Найти" }).click();
+    await page.getByRole("button", { name: "Применить: 12 месяцев" }).click();
+    await page.locator("#results article").first().waitFor();
+    assert.equal(await page.locator("select[name=term]").inputValue(), "12");
+    await page.getByRole("link", { name: "Аналитика поиска" }).click();
+    await page.getByLabel("Ключ аналитики").fill(process.env.ANALYTICS_TOKEN);
+    await page.getByLabel("Только демо-запросы").check();
+    await page.getByRole("button", {name: "Обновить"}).click();
+    await page.getByRole("cell", {name: /Сузило выдачу условие «срок лицензии»/}).first().waitFor();
+    console.log("Проверены подсказки, сравнение, условия закупки и отчёт по демо-запросам");
   } finally {
     await browser.close();
   }

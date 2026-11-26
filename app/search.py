@@ -1,6 +1,8 @@
 import re
 from html import unescape
 
+from app.procurement import filter_offers, purchase_values
+
 NORMALIZATIONS = (
     (re.compile(r"\bкрипто[ -]+про\b", re.IGNORECASE), "КриптоПро"),
     (re.compile(r"\bантивирь\b", re.IGNORECASE), "антивирус"),
@@ -280,14 +282,18 @@ def merge_candidates(lexical, semantic, lexical_weight):
     ), reverse=True)
 
 
-def as_card(item, reason):
+def card_attributes(item):
     attributes = dict(item["attributes"])
     for field in unescape(item.get("description") or "").split("•"):
         label, separator, value = field.strip().partition(": ")
         if separator and label in {"Минимальная покупка", "Платформа", "Тип клиента", "Тип лицензии"}:
             attributes.setdefault(label, value)
+    return attributes
+
+
+def as_card(item, reason):
     return {key: value for key, value in {
-        **item, "name": unescape(item["name"]), "attributes": attributes,
+        **item, "name": unescape(item["name"]), "attributes": card_attributes(item),
         "family_id": family_key(item),
         "price": item["price"] or None, "reason": reason,
     }.items() if key not in {"exact", "description"}}
@@ -349,12 +355,15 @@ def buyer_type(card):
     return value if value in {"физлицо", "юрлицо"} else None
 
 
-def compatibility(anchor, offer, query, category):
+def compatibility(anchor, offer, query, category, platform=None):
     license_type = offer["attributes"].get("Тип лицензии") or ""
     if re.search(r"продлен|обновлен|renewal|upgrade", normal_form(offer["name"] + " " + license_type)):
         return None
     required = platform_labels(query) or platform_values(anchor)
-    shared = required & platform_values(offer)
+    if platform:
+        shared = {platform.replace("-", " ")} if platform in purchase_values(offer["attributes"])["platform"] else set()
+    else:
+        shared = required & platform_values(offer)
     if anchor["category_id"] in SERVER_CATEGORIES:
         shared = {label for label in shared if label.startswith("windows server")
                   or label in {"astra linux", "alt linux", "ubuntu", "debian", "centos",
@@ -374,12 +383,12 @@ def compatibility(anchor, offer, query, category):
     }
 
 
-def fill_recommendations(connection, snapshot, query, results):
+def fill_recommendations(connection, snapshot, query, results, platform=None):
     if not results or len(results) >= 4:
         return []
     anchor = results[0]
     rule = RECOMMENDATIONS.get(anchor["category_id"])
-    if not rule or not (platform_labels(query) or platform_values(anchor)):
+    if not rule or not (platform or platform_labels(query) or platform_values(anchor)):
         return []
     target, reason = rule
     taken = {card["family_id"] for card in results}
@@ -391,7 +400,7 @@ def fill_recommendations(connection, snapshot, query, results):
         card = as_card(row, reason)
         if card["family_id"] in taken:
             continue
-        proof = compatibility(anchor, card, query, target)
+        proof = compatibility(anchor, card, query, target, platform)
         if proof is None:
             continue
         card["reason"] = reason + ". Совпадение платформы: " + ", ".join(proof["matched_platforms"])
@@ -404,7 +413,27 @@ def fill_recommendations(connection, snapshot, query, results):
     return recommendations
 
 
-def assemble_results(connection, snapshot, query, lexical, semantic):
+def purchase_family_offers(connection, snapshot, matching, query, versions):
+    families = list(dict.fromkeys(item["group_id"] for item in matching if item["group_id"]))
+    if any(item["exact"] for item in matching):
+        return [item for item in matching if item["exact"]]
+    if not families:
+        return matching
+    rows = connection.execute("""
+        SELECT id AS offer_id, group_id, category_id, name, vendor, url, price, currency,
+               available, attributes, left(description, 1200) AS description, false AS exact
+        FROM offer WHERE snapshot_id = %s AND group_id = ANY(%s)
+        ORDER BY available DESC, id
+    """, (snapshot, families))
+    positions = {key: index for index, key in enumerate(dict.fromkeys(map(family_key, matching)))}
+    seen = {item["offer_id"]: item for item in matching}
+    for item in rows:
+        if matches_product_variant(item, query, versions):
+            seen.setdefault(item["offer_id"], item)
+    return sorted(seen.values(), key=lambda item: positions[family_key(item)])
+
+
+def assemble_results(connection, snapshot, query, lexical, semantic, filters=None, diagnostics=None):
     versions = set(VERSION.findall(query))
     # Длинные формулировки чаще описывают задачу. Версия и артикул сохраняют приоритет.
     natural_language = len(query.split()) >= 5 and not versions
@@ -415,13 +444,21 @@ def assemble_results(connection, snapshot, query, lexical, semantic):
         preferred = [item for item in matching if item["exact"] or item["category_id"] in categories]
         if preferred:
             matching = preferred
+    if filters:
+        matching = purchase_family_offers(connection, snapshot, matching, query, versions)
+        matching, counts = filter_offers(matching, filters, family_key, card_attributes)
+        if diagnostics is not None:
+            diagnostics.update(counts)
+    elif diagnostics is not None:
+        count = len({family_key(item) for item in matching})
+        diagnostics.update(families_before=count, families_after=count, conditions={})
     lexical_ids = {item["offer_id"] for item in lexical}
     results = [as_card(item, "Совпадение артикула или ID" if item["exact"] else (
         "Совпадение по каталогу" if item["offer_id"] in lexical_ids else "Похожее назначение продукта"
     )) for item in select_families(matching)[:4]]
     for card in results:
         card["match_type"] = "direct"
-    recommendations = fill_recommendations(connection, snapshot, query, results)
+    recommendations = fill_recommendations(connection, snapshot, query, results, (filters or {}).get("platform"))
     return results, [], recommendations
 
 
