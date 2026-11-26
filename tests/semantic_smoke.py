@@ -27,6 +27,8 @@ for semantic in (False, True):
     for query in QUERIES:
         result, latency = search(query, semantic)
         assert result["search_mode"] == ("hybrid" if semantic else "lexical"), result
+        if semantic and query.startswith("подключиться"):
+            assert result["results"] and result["results"][0]["category_id"] in ("327029", "327030"), result
         if query == "AnyDesk":
             assert result["results"] and "anydesk" in result["results"][0]["name"].casefold(), result
         timings.append(latency)
