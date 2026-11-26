@@ -3,6 +3,12 @@ const status = document.querySelector("#status");
 const results = document.querySelector("#results");
 let activeSearch;
 
+function renderSection(id, cards) {
+  const section = document.getElementById(id);
+  section.hidden = !cards.length;
+  section.querySelector(".cards").replaceChildren(...cards.map(productCard));
+}
+
 function addText(parent, tag, text) {
   const element = document.createElement(tag);
   element.textContent = text;
@@ -31,14 +37,20 @@ form.addEventListener("submit", async (event) => {
   const controller = new AbortController();
   activeSearch = controller;
   results.replaceChildren();
+  renderSection("alternatives", []);
+  renderSection("recommendations", []);
   status.textContent = "Ищем товары…";
   const params = new URLSearchParams(new FormData(form));
+  if (document.querySelector("#lexical").checked) params.set("semantic", "false");
   try {
     const response = await fetch("/search?" + params, { signal: controller.signal });
     if (!response.ok) throw new Error("Поиск недоступен");
     const data = await response.json();
     results.replaceChildren(...data.results.map(productCard));
-    status.textContent = data.clarification || "Результаты поиска";
+    renderSection("alternatives", data.alternatives);
+    renderSection("recommendations", data.recommendations);
+    status.textContent = data.clarification || (data.search_mode === "hybrid" ?
+      "Результаты поиска по тексту и смыслу" : "Результаты текстового поиска");
   } catch (error) {
     if (error.name !== "AbortError") status.textContent = "Поиск временно недоступен. Попробуйте ещё раз.";
   }

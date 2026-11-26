@@ -16,9 +16,12 @@
         <input id="query" name="q" type="search" required maxlength="200" placeholder="КриптоПро CSP 5.0">
         <button type="submit">Найти</button>
       </div>
+      <label><input id="lexical" type="checkbox"> Только текстовый поиск</label>
     </form>
     <p id="status" role="status"></p>
-    <section id="results" aria-label="Результаты поиска"></section>
+    <section id="results" class="cards" aria-label="Результаты поиска"></section>
+    <section id="alternatives" hidden><h2>Альтернативы</h2><div class="cards"></div></section>
+    <section id="recommendations" hidden><h2>Сопутствующие товары</h2><div class="cards"></div></section>
   </main>
 </body>
 </html>

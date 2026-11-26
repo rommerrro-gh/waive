@@ -1,0 +1,16 @@
+services:
+  api:
+    environment:
+      EMBEDDING_URL: http://inference:8001
+      MODEL_REVISION: ${MODEL_REVISION:?Укажите версию скачанной модели}
+  inference:
+    build: ./inference
+    environment:
+      TORCH_THREADS: ${TORCH_THREADS:-2}
+      MODEL_DIR: /models/e5
+      MODEL_REVISION: ${MODEL_REVISION:?Укажите версию скачанной модели}
+    volumes:
+      - model-cache:/models:ro
+volumes:
+  model-cache:
+    name: waive-model-cache

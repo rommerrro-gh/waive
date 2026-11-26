@@ -7,7 +7,7 @@ label { display: block; margin-bottom: .6rem; font-weight: 600; }
 input, button { font: inherit; padding: .85rem; border: 1px solid #7b8da5; border-radius: .6rem; }
 input { min-width: 0; flex: 1; }
 button { background: #084e54; color: white; cursor: pointer; }
-#results { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: 1rem; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: 1rem; }
 article { background: white; padding: 1rem; border: 1px solid #d6dee8; border-radius: .75rem; }
 h2 { font-size: 1.1rem; margin-top: 0; }
 a { color: #075c63; }
