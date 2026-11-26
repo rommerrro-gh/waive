@@ -23,8 +23,9 @@ FAMILY_PATTERN = re.compile(r"family_id\s*:\s*['\"]?(\d+)")
 
 
 class SearchPage(HTMLParser):
-    def __init__(self):
+    def __init__(self, query):
         super().__init__()
+        self.query = " ".join(query.casefold().split())
         self.cards = {}
         self.family_ids = {}
         self.heading = False
@@ -39,7 +40,8 @@ class SearchPage(HTMLParser):
         href = urlsplit(urljoin(ORIGIN, attributes.get("href") or ""))
         params = parse_qs(href.query)
         position = params.get("position", [""])[0]
-        if href.netloc != "store.softline.ru" or "search_request" not in params or position not in {"1", "2", "3", "4"}:
+        request = " ".join(params.get("search_request", [""])[0].casefold().split())
+        if href.netloc != "store.softline.ru" or request != self.query or position not in {"1", "2", "3", "4"}:
             return
         rank = int(position)
         if "b-product-item__image-box" in (attributes.get("class") or "").split():
@@ -72,20 +74,20 @@ def catalog_categories(feed):
 def collect(query):
     url = urljoin(ORIGIN, "search/?" + urlencode({"query": query}))
     started = time.monotonic()
-    with urlopen(Request(url, headers={"User-Agent": "Waive catalog comparison (one request at a time)"}), timeout=20) as response:
+    with urlopen(Request(url, headers={"User-Agent": "Waive catalog comparison (one request at a time)"}), timeout=35) as response:
         if urlsplit(response.url).hostname != "store.softline.ru":
             raise ValueError("Переадресация за пределы магазина")
         html = response.read(3000000).decode("utf-8", "replace")
     delay = round((time.monotonic() - started) * 1000, 1)
-    parser = SearchPage()
+    parser = SearchPage(query)
     parser.feed(html)
     heading = " ".join(parser.headers)
     headings_match = "по запросу" in heading.casefold() and query.casefold() in heading.casefold()
     empty = re.search(r"ничего не найдено|не удалось найти|нет результатов|найдено\s+0\b", heading, re.I)
-    if not headings_match and not empty:
-        raise ValueError("Не подтверждена страница результатов поиска")
+    if not headings_match and not empty and not parser.cards:
+        raise ValueError(f"Не подтверждена страница результатов поиска. Заголовок: {heading[:120]}")
     if not parser.cards and not empty:
-        raise ValueError("Карточки не разобраны, пустая выдача не подтверждена")
+        raise ValueError(f"Карточки не разобраны. Заголовок: {heading[:120]}")
     if parser.cards and sorted(parser.cards) != list(range(1, len(parser.cards) + 1)):
         raise ValueError("Не удалось восстановить непрерывный порядок карточек")
     return delay, [
@@ -111,7 +113,7 @@ def classify(query, field, accepted, rows, categories):
     return None
 
 
-def measure(feed):
+def measure(feed, previous):
     categories = catalog_categories(feed)
     requests = [
         ("Эталоны Softline" if source == "эталон" else "Сценарии настройки", query, field,
@@ -120,12 +122,15 @@ def measure(feed):
     ] + [("Пользовательские задачи", query, "category_id", expected) for query, expected in INTENTS]
     rows = []
     for index, (segment, query, field, expected) in enumerate(requests, 1):
+        if query in previous:
+            rows.append(previous[query])
+            continue
         try:
             elapsed, cards = collect(query)
         except (HTTPError, URLError, TimeoutError, ValueError) as error:
             code = getattr(error, "code", None)
             rows.append({"query": query, "segment": segment, "error": str(error)})
-            print(f"{index}/{len(requests)}: выдача не подтверждена", flush=True)
+            print(f"{index}/{len(requests)}: выдача не подтверждена. {str(error)[:240]}", flush=True)
             if code in (403, 429):
                 break
         else:
@@ -156,8 +161,15 @@ def measure(feed):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--feed", type=Path, required=True)
+    parser.add_argument("--previous", type=Path)
     args = parser.parse_args()
-    summary, rows = measure(args.feed)
+    previous = {}
+    if args.previous:
+        previous = {
+            row["query"]: row for row in json.loads(args.previous.read_text())["queries"]
+            if "error" not in row
+        }
+    summary, rows = measure(args.feed, previous)
     print(json.dumps(summary, ensure_ascii=False))
     Path("softline-live-results.json").write_text(
         json.dumps({"summary": summary, "queries": rows}, ensure_ascii=False, indent=2) + "\n",

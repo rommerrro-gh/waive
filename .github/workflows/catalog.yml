@@ -1,18 +1,25 @@
-name: Замер выдачи магазина Softline
+name: Повторная проверка выдачи Softline
 on:
   push:
     branches: [probe/softline-search]
 permissions:
   contents: read
+  actions: read
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
-      - name: Собрать первые четыре публичные карточки по 33 запросам
-        run: python3 scripts/compare_public_store.py --feed organizer-materials/Mindbox.xml.gz
-      - name: Сохранить замер публичной выдачи
+      - uses: actions/download-artifact@v4
+        with:
+          name: softline-live-results
+          github-token: ${{ github.token }}
+          run-id: 45805845781
+          path: previous
+      - name: Повторить только неподтверждённые запросы
+        run: python3 scripts/compare_public_store.py --feed organizer-materials/Mindbox.xml.gz --previous previous/softline-live-results.json
+      - name: Сохранить сводную выдачу
         uses: actions/upload-artifact@v4
         with:
           name: softline-live-results
