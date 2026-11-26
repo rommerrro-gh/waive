@@ -61,6 +61,10 @@ jobs:
           docker compose exec -T api python - < tests/semantic_smoke.py
           docker compose exec -T api python - < scripts/evaluate.py > search-evaluation.jsonl
           python3 -c 'import json; [print({k: v for k, v in json.loads(line).items() if k != "rows"}) for line in open("search-evaluation.jsonl")]'
+      - name: Разобрать смысловые запросы по этапам
+        run: |
+          docker compose exec -T api sh -c 'cat > /tmp/evaluate.py' < scripts/evaluate.py
+          docker compose exec -T -e PYTHONPATH=/app:/tmp api python - < scripts/diagnose_retrieval.py | tee search-diagnostics.jsonl
       - name: Измерить задержку под пробной нагрузкой
         run: |
           python3 scripts/measure.py --mode lexical --requests 120 --rps 10 | tee search-load.jsonl
@@ -72,6 +76,7 @@ jobs:
           path: |
             search-evaluation.jsonl
             search-load.jsonl
+            search-diagnostics.jsonl
       - name: Проверить поиск при отказе модели
         run: |
           docker compose stop inference
