@@ -21,8 +21,11 @@ async function main() {
     assert.equal(await page.getByRole("spinbutton", {name: "Цена от, ₽"}).isVisible(), true);
     await filters.click();
     assert.equal(await stock.isVisible(), false);
-    await input.fill("Kaspersky");
-    await page.getByRole("button", {name: "Найти", exact: true}).click();
+    await input.fill("каспер");
+    await page.getByRole("option", {name: "Kaspersky", exact: true}).waitFor();
+    await input.press("ArrowDown");
+    await input.press("Enter");
+    assert.equal(await input.inputValue(), "Kaspersky");
     const more = page.getByRole("button", {name: "Показать ещё", exact: true});
     const cards = page.locator("#results article");
     await more.waitFor();

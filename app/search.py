@@ -111,7 +111,7 @@ def one_edit_title(query, title):
 
 def is_kaspersky_query(query):
     name = normal_form(query)
-    if name == "лаборатория касперского" or normalize_query(name) == "Kaspersky":
+    if name in {"каспер", "лаборатория касперского"} or normalize_query(name) == "Kaspersky":
         return True
     return name.isalpha() and any(one_edit_title(name, brand) for brand in KASPERSKY_NAMES)
 
@@ -508,7 +508,14 @@ SUGGEST_FAMILIES = """
 
 
 def suggest_families(connection, snapshot, query):
+    name = normal_form(query)
+    brand = is_kaspersky_query(query) or (
+        len(name) >= 4 and any(alias.startswith(name) for alias in KASPERSKY_NAMES)
+    )
     rows = connection.execute(SUGGEST_FAMILIES, {
-        "query": "Kaspersky" if is_kaspersky_query(query) else normalize_query(query), "snapshot": snapshot,
+        "query": "Kaspersky" if brand else normalize_query(query), "snapshot": snapshot,
     }).fetchall()
-    return [unescape(row["name"]) for row in rows]
+    suggestions = [unescape(row["name"]) for row in rows]
+    if brand and suggestions:
+        return ["Kaspersky", *[item for item in suggestions if item.casefold() != "kaspersky"][:5]]
+    return suggestions

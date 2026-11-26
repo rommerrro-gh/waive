@@ -74,7 +74,7 @@ class TypoTests(unittest.TestCase):
         self.assertFalse(one_edit_title("Office Suite", "Antivirus Suite"))
 
     def test_short_brand_queries_allow_one_edit_without_capturing_product_queries(self):
-        for query in ("Kaspersky", "Касперский", "Лаборатория Касперского", "касперчкий", "касперсикй", "Kaspresky"):
+        for query in ("Kaspersky", "Касперский", "Каспер", "Лаборатория Касперского", "касперчкий", "касперсикй", "Kaspresky"):
             with self.subTest(query=query):
                 self.assertTrue(is_kaspersky_query(query))
         for query in ("касперчк", "касперский 2024", "Kaspersky Small Office Security", "игровой коврик"):
