@@ -69,6 +69,17 @@ jobs:
         run: |
           python3 scripts/measure.py --mode lexical --requests 120 --rps 10 | tee search-load.jsonl
           python3 scripts/measure.py --mode hybrid --requests 120 --rps 10 | tee -a search-load.jsonl
+      - name: Сравнить поиск на расширенной выборке
+        run: |
+          git fetch --no-tags --depth=1 origin eb493e9fd7ff375819a7e6afb03d3ba7f1278846
+          baseline_dir=$(mktemp -d)
+          git archive eb493e9fd7ff375819a7e6afb03d3ba7f1278846 Dockerfile app requirements.txt alembic.ini migrations | tar -x -C "$baseline_dir"
+          docker build -t waive-historical "$baseline_dir"
+          network=$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "$(docker compose ps -q db)")
+          docker run -d --name waive-historical --network "$network" -e DATABASE_URL -p 127.0.0.1:8002:8000 waive-historical
+          curl --fail --retry 12 --retry-all-errors --retry-delay 1 http://127.0.0.1:8002/ready
+          docker compose exec -T db psql -v ON_ERROR_STOP=1 -U waive -d waive -At -F $'\t' -c 'SELECT id, category_id FROM offer JOIN active_catalog ON offer.snapshot_id = active_catalog.snapshot_id' > "$RUNNER_TEMP/current-categories.tsv"
+          python3 scripts/benchmark_search.py --feed organizer-materials/Mindbox.xml.gz --catalog-id-map "$RUNNER_TEMP/current-categories.tsv"
       - name: Сохранить отчёт о качестве поиска
         uses: actions/upload-artifact@v4
         with:
@@ -77,6 +88,7 @@ jobs:
             search-evaluation.jsonl
             search-load.jsonl
             search-diagnostics.jsonl
+            search-comparison.json
       - name: Проверить поиск при отказе модели
         run: |
           docker compose stop inference
