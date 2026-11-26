@@ -12,18 +12,26 @@ SERVER_REQUEST = re.compile(r"(?:(?:купить|подобрать)\s+)?сер�
 VERSION = re.compile(r"(?<![\w.])\d+(?:\.\d+)+(?![\w.])")
 
 SEARCH_OFFERS = """
-    WITH input AS (
+    WITH input AS MATERIALIZED (
         SELECT lower(%(query)s) AS raw,
             plainto_tsquery('simple', %(query)s) ||
             plainto_tsquery('russian', %(query)s) AS keywords
-    ), candidates AS (
-        SELECT o.id, (o.id = i.raw OR lower(o.vendor_code) = i.raw) IS TRUE AS exact,
-            ts_rank_cd(s.document, i.keywords) AS rank
-        FROM offer o
-        JOIN offer_search s ON (s.snapshot_id, s.offer_id) = (o.snapshot_id, o.id)
-        CROSS JOIN input i
+    ), matches AS (
+        SELECT s.offer_id AS id, false AS exact, ts_rank_cd(s.document, i.keywords) AS rank
+        FROM input i JOIN offer_search s ON s.document @@ i.keywords
+        WHERE s.snapshot_id = %(snapshot)s
+        UNION ALL
+        SELECT o.id, true, 0::real
+        FROM input i JOIN offer o ON o.id = i.raw
         WHERE o.snapshot_id = %(snapshot)s
-            AND (s.document @@ i.keywords OR o.id = i.raw OR lower(o.vendor_code) = i.raw)
+        UNION ALL
+        SELECT o.id, true, 0::real
+        FROM input i JOIN offer o ON lower(o.vendor_code) = i.raw
+        WHERE o.snapshot_id = %(snapshot)s
+    ), candidates AS (
+        SELECT id, bool_or(exact) AS exact, max(rank) AS rank
+        FROM matches
+        GROUP BY id
     )
     SELECT o.id AS offer_id, o.group_id, o.category_id, o.name, o.vendor, o.url,
         o.price, o.currency, o.available, o.attributes, left(o.description, 1200) AS description, c.exact
@@ -94,15 +102,22 @@ RECOMMENDATIONS = {
 
 
 CATEGORY_CANDIDATES = """
-    SELECT id AS offer_id, group_id, category_id, name, vendor, url,
-        price, currency, available, attributes, left(description, 1200) AS description, false AS exact
-    FROM offer
-    WHERE snapshot_id = %(snapshot)s AND category_id = ANY(%(categories)s)
-    ORDER BY available DESC,
-        row_number() OVER (PARTITION BY group_id, CASE WHEN group_id IS NULL THEN id END
-                           ORDER BY available DESC, (price > 0) DESC NULLS LAST, id),
-        (price > 0) DESC NULLS LAST, id
-    LIMIT 25
+    WITH cheapest AS (
+        SELECT id, available, price, row_number() OVER (
+            PARTITION BY group_id, CASE WHEN group_id IS NULL THEN id END
+            ORDER BY available DESC, (price > 0) DESC NULLS LAST, id
+        ) AS family_position
+        FROM offer
+        WHERE snapshot_id = %(snapshot)s AND category_id = ANY(%(categories)s)
+    ), selected AS MATERIALIZED (
+        SELECT id, available, price, family_position FROM cheapest
+        ORDER BY available DESC, family_position, (price > 0) DESC NULLS LAST, id
+        LIMIT 25
+    )
+    SELECT o.id AS offer_id, o.group_id, o.category_id, o.name, o.vendor, o.url,
+        o.price, o.currency, o.available, o.attributes, left(o.description, 1200) AS description, false AS exact
+    FROM selected s JOIN offer o ON o.id = s.id AND o.snapshot_id = %(snapshot)s
+    ORDER BY s.available DESC, s.family_position, (s.price > 0) DESC NULLS LAST, s.id
 """
 
 
@@ -114,6 +129,24 @@ def preferred_categories(query):
         "из дома" in normalized and re.search(r"(подключ|зайти).*(компьютер|пк)", normalized)
     ):
         return REMOTE_CATEGORIES
+    if re.search(r"резервн\w* копи|б[эе]кап|backup", normalized) or (
+        re.search(r"сохрани|сделат|созда", normalized)
+        and re.search(r"копи[юи]|копирован", normalized)
+        and re.search(r"файл|данн|документ", normalized)
+    ):
+        return {"1033"}
+    if re.search(r"защит|антивирус|антивирь", normalized) and re.search(
+        r"вирус|компьютер|рабоч\w* станци|сотрудник", normalized
+    ):
+        return {"650"}
+    if re.search(r"стойк|стоечн|rack", normalized) and re.search(
+        r"\bсервер\b|сервер[ыа]\b|желез|оборудован", normalized
+    ):
+        return {"86563"}
+    if re.search(r"редактор|редактир|офисн\w* пакет", normalized) and re.search(
+        r"документ|текст", normalized
+    ) and re.search(r"таблиц", normalized):
+        return {"1145", "222323"}
     return set()
 
 
@@ -132,9 +165,9 @@ def lexical_candidates(connection, snapshot, query):
         if preferred:
             return preferred
     candidates = connection.execute(SEARCH_OFFERS, params).fetchall()
-    if not candidates and len(query) >= 4:
-        candidates = connection.execute(FUZZY_OFFERS, params).fetchall()
     categories = preferred_categories(query)
+    if not candidates and not categories and len(query) >= 4 and len(query.split()) <= 4:
+        candidates = connection.execute(FUZZY_OFFERS, params).fetchall()
     if categories and not any(item["category_id"] in categories for item in candidates):
         candidates.extend(connection.execute(CATEGORY_CANDIDATES, {
             "snapshot": snapshot, "categories": sorted(categories),
@@ -184,20 +217,36 @@ def matches_product_variant(item, query, versions):
     return True
 
 
+def diversify(candidates):
+    families = set()
+    first, variants = [], []
+    for item in candidates:
+        family = item["group_id"] or item["offer_id"]
+        if item["exact"] or family not in families:
+            first.append(item)
+        else:
+            variants.append(item)
+        families.add(family)
+    return first + variants
+
+
 def assemble_results(connection, snapshot, query, lexical, semantic):
     versions = set(VERSION.findall(query))
     # Длинные формулировки чаще описывают задачу. Версия и артикул сохраняют приоритет.
     natural_language = len(query.split()) >= 5 and not versions
     merged = merge_candidates(lexical, semantic, 0.65 if natural_language else 1.3)
     categories = preferred_categories(query)
+    matching = [item for item in merged if matches_product_variant(item, query, versions)]
     if categories:
-        merged.sort(key=lambda item: (
-            item["exact"], item["category_id"] in categories,
-        ), reverse=True)
+        preferred = [item for item in matching if item["exact"] or item["category_id"] in categories]
+        if preferred:
+            matching = preferred
+    if (natural_language or categories) and not versions:
+        matching = diversify(matching)
     lexical_ids = {item["offer_id"] for item in lexical}
     results = [as_card(item, "Совпадение артикула или ID" if item["exact"] else (
         "Совпадение по каталогу" if item["offer_id"] in lexical_ids else "Похожее назначение продукта"
-    )) for item in merged if matches_product_variant(item, query, versions)][:4]
+    )) for item in matching[:4]]
     if not results:
         return results, [], []
     top = results[0]

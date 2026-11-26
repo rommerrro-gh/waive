@@ -1,6 +1,9 @@
 import unittest
 
-from app.search import as_card, matches_product_variant, matching_version, merge_candidates
+from app.search import (
+    as_card, diversify, matches_product_variant, matching_version, merge_candidates,
+    preferred_categories,
+)
 
 
 class VersionTests(unittest.TestCase):
@@ -38,3 +41,24 @@ class ProductCardTests(unittest.TestCase):
         self.assertEqual(card["name"], "O&O")
         self.assertEqual(card["attributes"]["Минимальная покупка"], "от 10 до 49 шт.")
         self.assertNotIn("description", card)
+
+class IntentTests(unittest.TestCase):
+    def test_paraphrases_match_catalog_categories(self):
+        cases = [
+            ("создать копию документов на случай сбоя", {"1033"}),
+            ("защитить рабочие станции компании от вредоносных вирусов", {"650"}),
+            ("подбор оборудования для монтажа в серверную стойку", {"86563"}),
+            ("хочу редактировать текст и таблицы на работе", {"1145", "222323"}),
+            ("обновить КриптоПро CSP 5.0", set()),
+        ]
+        for query, categories in cases:
+            with self.subTest(query=query):
+                self.assertEqual(preferred_categories(query), categories)
+
+    def test_diversify_fills_from_other_families_before_variants(self):
+        variants = [
+            {"offer_id": index, "group_id": family, "exact": exact}
+            for index, family, exact in [(10, "a", True), (11, "a", False),
+                                          (12, "b", False), (13, None, False)]
+        ]
+        self.assertEqual([item["offer_id"] for item in diversify(variants)], [10, 12, 13, 11])
