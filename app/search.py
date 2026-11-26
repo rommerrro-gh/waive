@@ -1,5 +1,12 @@
 import re
 
+NORMALIZATIONS = (
+    (re.compile(r"\bкрипто[ -]+про\b", re.IGNORECASE), "КриптоПро"),
+    (re.compile(r"\bантивирь\b", re.IGNORECASE), "антивирус"),
+    (re.compile(r"\bвинда\b", re.IGNORECASE), "Windows"),
+)
+SERVER_CATEGORIES = {"86563", "87093", "87268", "87276"}
+SERVER_REQUEST = re.compile(r"(?:(?:купить|подобрать)\s+)?сервер(?:ы)?", re.IGNORECASE)
 VERSION = re.compile(r"(?<![\w.])\d+(?:\.\d+)+(?![\w.])")
 
 SEARCH_OFFERS = """
@@ -84,8 +91,30 @@ RECOMMENDATIONS = {
 }
 
 
+CATEGORY_CANDIDATES = """
+    SELECT id AS offer_id, group_id, category_id, name, vendor, url,
+        price, currency, available, attributes, false AS exact
+    FROM offer
+    WHERE snapshot_id = %(snapshot)s AND category_id = ANY(%(categories)s)
+    ORDER BY available DESC, (price > 0) DESC NULLS LAST, id
+    LIMIT 25
+"""
+
+
+def normalize_query(query):
+    for pattern, replacement in NORMALIZATIONS:
+        query = pattern.sub(replacement, query)
+    return query
+
+
 def lexical_candidates(connection, snapshot, query):
-    params = {"snapshot": snapshot, "query": query}
+    params = {"snapshot": snapshot, "query": normalize_query(query)}
+    if SERVER_REQUEST.fullmatch(query):
+        preferred = connection.execute(CATEGORY_CANDIDATES, {
+            "snapshot": snapshot, "categories": sorted(SERVER_CATEGORIES),
+        }).fetchall()
+        if preferred:
+            return preferred
     candidates = connection.execute(SEARCH_OFFERS, params).fetchall()
     if not candidates and len(query) >= 4:
         return connection.execute(FUZZY_OFFERS, params).fetchall()
@@ -117,6 +146,9 @@ def as_card(item, reason):
 
 def assemble_results(connection, snapshot, query, lexical, semantic):
     versions = set(VERSION.findall(query))
+    if SERVER_REQUEST.fullmatch(query):
+        hardware = [item for item in semantic if item["category_id"] in SERVER_CATEGORIES]
+        semantic = hardware if lexical else hardware or semantic
     merged = merge_candidates(lexical, semantic)
     lexical_ids = {item["offer_id"] for item in lexical}
     results = [as_card(item, "Совпадение артикула или ID" if item["exact"] else (
