@@ -56,6 +56,12 @@ for prefix in ("касп", "каспер", "касперчкий", "Kasper"):
     suggestions = get("/suggest?" + urlencode({"q": prefix}))["suggestions"]
     assert suggestions[0] == "Kaspersky" and 1 < len(suggestions) <= 6, suggestions
     assert len(suggestions) == len(set(suggestions)), suggestions
+for prefix, fragment in (
+    ("майкр", "Microsoft"), ("доктор веб", "Dr.Web"), ("анидеск", "AnyDesk"),
+    ("винрар", "WinRAR"), ("астра", "Astra"), ("логитек", "Logitech"), ("Logitech", "Logitech"),
+):
+    suggestions = get("/suggest?" + urlencode({"q": prefix}))["suggestions"]
+    assert any(fragment in option for option in suggestions), (prefix, suggestions)
 office = get("/search?" + urlencode({"q": office_id, "semantic": "false"}))
 assert office["results"][0]["offer_id"] == office_id, office
 assert len(office["recommendations"]) > 0, office

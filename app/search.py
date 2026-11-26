@@ -15,6 +15,22 @@ SERVER_REQUEST = re.compile(r"(?:(?:купить|подобрать)\s+)?сер�
 VERSION = re.compile(r"(?<![\w.])\d+(?:\.\d+)+(?![\w.])")
 KASPERSKY_NAMES = ("kaspersky", "касперский", "касперски")
 KASPERSKY_VENDOR_NAMES = {"лаборатория касперского", "kaspersky", "kaspersky lab"}
+SUGGESTION_ALIASES = {
+    "Kaspersky": KASPERSKY_NAMES,
+    "Microsoft": ("майкрософт", "микрософт"),
+    "Dr.Web": ("доктор веб", "докторвеб", "др веб", "др. веб", "dr web", "drweb"),
+    "AnyDesk": ("анидеск", "анидэск", "энидеск", "энидэск", "ани деск", "эни деск"),
+    "WinRAR": ("винрар", "вин рар"),
+    "Astra": ("астра",),
+    "Astra Linux": ("астра линукс", "астра linux", "астралинукс"),
+    "Altova": ("алтова", "альтова"),
+    "PRO32": ("про32", "про 32"),
+    "Logitech": ("логитек", "лоджитек"),
+    "Adobe": ("адоб", "адобе", "адоби", "эдоб", "эдобе", "эдоби"),
+    "Autodesk": ("автодеск", "аутодеск"),
+    "VMware": ("вмвар", "вмваре", "вмвэр"),
+    "ESET": ("есет", "эсет"),
+}
 
 SEARCH_OFFERS = """
     WITH input AS MATERIALIZED (
@@ -506,16 +522,43 @@ SUGGEST_FAMILIES = """
     LIMIT 6
 """
 
+SUGGEST_UNGROUPED = """
+    SELECT o.name
+    FROM offer_search s
+    JOIN offer o ON (o.snapshot_id, o.id) = (s.snapshot_id, s.offer_id)
+    WHERE s.snapshot_id = %(snapshot)s AND o.group_id IS NULL AND o.available
+      AND char_length(o.name) <= 200
+      AND (s.name_normalized LIKE %(leading)s OR s.name_normalized LIKE %(word)s)
+    GROUP BY o.name
+    ORDER BY bool_or(s.name_normalized LIKE %(leading)s) DESC, length(o.name), o.name
+    LIMIT 6
+"""
+
+
+def resolve_suggestion_alias(query):
+    name = normal_form(query)
+    if is_kaspersky_query(name):
+        return "Kaspersky"
+    exact = next((canonical for canonical, aliases in SUGGESTION_ALIASES.items() if name in aliases), None)
+    if exact or len(name) < 4:
+        return exact
+    matches = {
+        canonical for canonical, aliases in SUGGESTION_ALIASES.items()
+        if any(alias.startswith(name) for alias in aliases)
+    }
+    return next(iter(matches)) if len(matches) == 1 else None
+
 
 def suggest_families(connection, snapshot, query):
-    name = normal_form(query)
-    brand = is_kaspersky_query(query) or (
-        len(name) >= 4 and any(alias.startswith(name) for alias in KASPERSKY_NAMES)
-    )
-    rows = connection.execute(SUGGEST_FAMILIES, {
-        "query": "Kaspersky" if brand else normalize_query(query), "snapshot": snapshot,
-    }).fetchall()
+    canonical = resolve_suggestion_alias(query)
+    lookup = canonical or normalize_query(query)
+    rows = connection.execute(SUGGEST_FAMILIES, {"query": lookup, "snapshot": snapshot}).fetchall()
+    if not rows and len(lookup) >= 4:
+        literal = lookup.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        rows = connection.execute(SUGGEST_UNGROUPED, {
+            "snapshot": snapshot, "leading": literal + "%", "word": "% " + literal + "%",
+        }).fetchall()
     suggestions = [unescape(row["name"]) for row in rows]
-    if brand and suggestions:
+    if canonical == "Kaspersky" and suggestions:
         return ["Kaspersky", *[item for item in suggestions if item.casefold() != "kaspersky"][:5]]
     return suggestions

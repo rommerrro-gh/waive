@@ -2,7 +2,7 @@ import unittest
 
 from app.search import (
     as_card, compatibility, fill_recommendations, is_kaspersky_query, matches_product_variant, matching_version, merge_candidates,
-    one_edit_title, preferred_categories, select_families,
+    one_edit_title, preferred_categories, resolve_suggestion_alias, select_families,
 )
 
 
@@ -80,6 +80,15 @@ class TypoTests(unittest.TestCase):
         for query in ("касперчк", "касперский 2024", "Kaspersky Small Office Security", "игровой коврик"):
             with self.subTest(query=query):
                 self.assertFalse(is_kaspersky_query(query))
+
+    def test_suggestion_aliases_handle_prefixes_without_matching_unrelated_words(self):
+        for query, expected in (
+            ("майкр", "Microsoft"), ("Доктор Веб", "Dr.Web"), ("анидеск", "AnyDesk"),
+            ("винрар", "WinRAR"), ("астра", "Astra"), ("астра лин", "Astra Linux"),
+            ("май", None), ("микрофон", None), ("астр", None), ("AnyD", None),
+        ):
+            with self.subTest(query=query):
+                self.assertEqual(resolve_suggestion_alias(query), expected)
 
 class FamilyOutputTests(unittest.TestCase):
     def test_priced_variant_preferred_and_exact_sku_preserved(self):

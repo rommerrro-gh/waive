@@ -30,6 +30,9 @@ async function main() {
     const cards = page.locator("#results article");
     await more.waitFor();
     assert.equal(await cards.count(), 12);
+    await input.fill("майкр");
+    await page.getByRole("option", {name: /Microsoft/}).first().waitFor();
+    await input.press("Escape");
     const firstPage = await cards.locator("h2").allTextContents();
     await more.click();
     assert.ok(await cards.count() > firstPage.length);
