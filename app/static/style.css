@@ -11,3 +11,29 @@ button { background: #084e54; color: white; cursor: pointer; }
 article { background: white; padding: 1rem; border: 1px solid #d6dee8; border-radius: .75rem; }
 h2 { font-size: 1.1rem; margin-top: 0; }
 a { color: #075c63; }
+
+.query-field { position: relative; min-width: 0; flex: 1; display: flex; }
+.query-field input { width: 100%; }
+#suggestions { position: absolute; top: 100%; left: 0; right: 0; z-index: 2; list-style: none; background: white; margin: .25rem 0 0; padding: .35rem; border: 1px solid #7b8da5; border-radius: .6rem; box-shadow: 0 .6rem 1.2rem #14233a24; max-height: 17rem; overflow: auto; }
+#suggestions li { padding: .65rem .75rem; border-radius: .3rem; cursor: pointer; }
+#suggestions li:hover, #suggestions li[aria-selected="true"] { background: #e1f0ef; }
+.card-actions { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.secondary { background: white; color: #084e54; padding: .5rem .65rem; }
+.secondary[aria-pressed="true"] { background: #e1f0ef; }
+button:disabled { opacity: .5; cursor: default; }
+.comparison-bar { margin: 1rem 0; padding: 1rem; border: 1px solid #bad2d3; border-radius: .6rem; background: #edf6f5; }
+.comparison-bar p { margin: 0 0 .4rem; }
+.comparison-item { overflow-wrap: anywhere; }
+.comparison-item { display: flex; align-items: center; gap: .5rem; padding: .3rem 0; }
+#open-comparison { margin-top: .5rem; }
+dialog { color: inherit; width: min(49rem, calc(100% - 3rem)); max-height: 85dvh; padding: 1rem; border: 1px solid #bad2d3; border-radius: .65rem; }
+dialog::backdrop { background: #14233a80; }
+.dialog-header { display: flex; align-items: center; justify-content: space-between; gap: .4rem; margin-bottom: .65rem; }
+.dialog-header h2 { margin: 0; }
+.dialog-header button { padding: .45rem .6rem; }
+.comparison-content { overflow-x: auto; }
+.comparison-content table { table-layout: fixed; width: 100%; border-collapse: collapse; min-width: 31rem; }
+.comparison-content th, .comparison-content td { overflow-wrap: anywhere; text-align: left; vertical-align: top; padding: .55rem; border-bottom: 1px solid #d6dee8; }
+.comparison-content th:first-child { width: 22%; }
+.comparison-content th a { display: block; margin-top: .3rem; font-weight: normal; }
+.comparison-content tr.difference { background: #e1f0ef; }

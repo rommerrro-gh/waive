@@ -15,7 +15,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool, PoolTimeout
 
 from app.embeddings import vector_literal, vectors
-from app.search import SEMANTIC_OFFERS, assemble_results, lexical_candidates
+from app.search import SEMANTIC_OFFERS, assemble_results, lexical_candidates, suggest_families
 
 logger = logging.getLogger(__name__)
 inference_slots = BoundedSemaphore(4)
@@ -76,6 +76,20 @@ def readiness():
     if not active:
         raise HTTPException(503, "Каталог готовится")
     return {"catalog_version": active["snapshot_id"]}
+
+
+@app.get("/suggest")
+def suggest(q: Annotated[str, Query(max_length=120)]):
+    query = " ".join(q.split())
+    if len(query) < 2:
+        return {"suggestions": []}
+    try:
+        with app.state.pool.connection() as connection:
+            active = connection.execute("SELECT snapshot_id FROM active_catalog").fetchone()
+            items = suggest_families(connection, active["snapshot_id"], query) if active else []
+    except (OperationalError, PoolTimeout, QueryCanceled) as error:
+        raise HTTPException(503, "Подсказки временно недоступны") from error
+    return {"suggestions": items}
 
 
 @app.get("/search")

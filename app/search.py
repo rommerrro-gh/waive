@@ -348,3 +348,30 @@ def assemble_results(connection, snapshot, query, lexical, semantic):
         rows = connection.execute(RELATED_OFFERS, {**params, "category": target, "limit": 2}).fetchall()
         recommendations = [as_card(row, reason) for row in rows]
     return results, alternatives, recommendations
+
+
+SUGGEST_FAMILIES = """
+    WITH input AS (
+        SELECT replace(lower(%(query)s), ' ', '') AS prefix
+    ), candidates AS (
+        SELECT c.id, c.name, strpos(replace(lower(c.name), ' ', ''), i.prefix) AS position
+        FROM category c CROSS JOIN input i
+        WHERE c.snapshot_id = %(snapshot)s
+          AND strpos(replace(lower(c.name), ' ', ''), i.prefix) > 0
+          AND EXISTS (
+              SELECT 1 FROM offer o
+              WHERE o.snapshot_id = c.snapshot_id AND o.group_id = c.id AND o.available
+          )
+    )
+    SELECT name FROM candidates
+    GROUP BY name
+    ORDER BY (min(position) = 1) DESC, min(position), length(name), name
+    LIMIT 6
+"""
+
+
+def suggest_families(connection, snapshot, query):
+    rows = connection.execute(SUGGEST_FAMILIES, {
+        "query": normalize_query(query), "snapshot": snapshot,
+    }).fetchall()
+    return [unescape(row["name"]) for row in rows]

@@ -10,18 +10,35 @@
 <body>
   <main>
     <h1>Поиск по каталогу Softline</h1>
-    <form role="search">
+    <form id="search" role="search">
       <label for="query">Название, бренд или артикул</label>
       <div class="field">
-        <input id="query" name="q" type="search" required maxlength="200" placeholder="КриптоПро CSP 5.0">
+        <div class="query-field">
+          <input id="query" name="q" type="search" required maxlength="200"
+                 placeholder="КриптоПро CSP 5.0" autocomplete="off" role="combobox"
+                 aria-autocomplete="list" aria-controls="suggestions" aria-expanded="false">
+          <ul id="suggestions" role="listbox" aria-label="Подсказки поиска" hidden></ul>
+        </div>
         <button type="submit">Найти</button>
       </div>
       <label><input id="lexical" type="checkbox"> Только текстовый поиск</label>
     </form>
+    <section id="comparison-bar" class="comparison-bar" aria-label="Выбранные предложения" hidden>
+      <p id="comparison-count" role="status"></p>
+      <div id="comparison-items"></div>
+      <button id="open-comparison" type="button" disabled>Сравнить предложения</button>
+    </section>
     <p id="status" role="status"></p>
     <section id="results" class="cards" aria-label="Результаты поиска"></section>
     <section id="alternatives" hidden><h2>Альтернативы</h2><div class="cards"></div></section>
     <section id="recommendations" hidden><h2>Сопутствующие товары</h2><div class="cards"></div></section>
   </main>
+  <dialog id="comparison" aria-labelledby="comparison-title">
+    <div class="dialog-header">
+      <h2 id="comparison-title">Сравнение предложений</h2>
+      <form method="dialog"><button type="submit">Закрыть</button></form>
+    </div>
+    <div id="comparison-content" class="comparison-content"></div>
+  </dialog>
 </body>
 </html>
