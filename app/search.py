@@ -1,4 +1,5 @@
 import re
+from html import unescape
 
 NORMALIZATIONS = (
     (re.compile(r"\bкрипто[ -]+про\b", re.IGNORECASE), "КриптоПро"),
@@ -25,7 +26,7 @@ SEARCH_OFFERS = """
             AND (s.document @@ i.keywords OR o.id = i.raw OR lower(o.vendor_code) = i.raw)
     )
     SELECT o.id AS offer_id, o.group_id, o.category_id, o.name, o.vendor, o.url,
-        o.price, o.currency, o.available, o.attributes, c.exact
+        o.price, o.currency, o.available, o.attributes, left(o.description, 1200) AS description, c.exact
     FROM candidates c
     JOIN offer o ON o.snapshot_id = %(snapshot)s AND o.id = c.id
     ORDER BY c.exact DESC, c.rank DESC, o.available DESC, o.id
@@ -34,7 +35,7 @@ SEARCH_OFFERS = """
 
 FUZZY_OFFERS = """
     SELECT o.id AS offer_id, o.group_id, o.category_id, o.name, o.vendor, o.url,
-        o.price, o.currency, o.available, o.attributes, false AS exact
+        o.price, o.currency, o.available, o.attributes, left(o.description, 1200) AS description, false AS exact
     FROM offer_search s
     JOIN offer o ON (o.snapshot_id, o.id) = (s.snapshot_id, s.offer_id)
     WHERE s.snapshot_id = %(snapshot)s AND lower(%(query)s) <%% s.name_normalized
@@ -60,7 +61,7 @@ SEMANTIC_OFFERS = """
         LIMIT 25
     )
     SELECT o.id AS offer_id, o.group_id, o.category_id, o.name, o.vendor, o.url,
-        o.price, o.currency, o.available, o.attributes, false AS exact
+        o.price, o.currency, o.available, o.attributes, left(o.description, 1200) AS description, false AS exact
     FROM nearest n
     CROSS JOIN LATERAL (
         SELECT candidate.* FROM (
@@ -77,7 +78,7 @@ SEMANTIC_OFFERS = """
 
 RELATED_OFFERS = """
     SELECT id AS offer_id, group_id, category_id, name, vendor, url,
-        price, currency, available, attributes
+        price, currency, available, attributes, left(description, 1200) AS description
     FROM offer
     WHERE snapshot_id = %(snapshot)s AND category_id = %(category)s AND available
         AND id <> ALL(%(excluded)s::text[])
@@ -94,10 +95,13 @@ RECOMMENDATIONS = {
 
 CATEGORY_CANDIDATES = """
     SELECT id AS offer_id, group_id, category_id, name, vendor, url,
-        price, currency, available, attributes, false AS exact
+        price, currency, available, attributes, left(description, 1200) AS description, false AS exact
     FROM offer
     WHERE snapshot_id = %(snapshot)s AND category_id = ANY(%(categories)s)
-    ORDER BY available DESC, (price > 0) DESC NULLS LAST, id
+    ORDER BY available DESC,
+        row_number() OVER (PARTITION BY group_id, CASE WHEN group_id IS NULL THEN id END
+                           ORDER BY available DESC, (price > 0) DESC NULLS LAST, id),
+        (price > 0) DESC NULLS LAST, id
     LIMIT 25
 """
 
@@ -156,9 +160,28 @@ def merge_candidates(lexical, semantic, lexical_weight):
 
 
 def as_card(item, reason):
+    attributes = dict(item["attributes"])
+    for field in unescape(item.get("description") or "").split("•"):
+        label, separator, value = field.strip().partition(": ")
+        if separator and label in {"Минимальная покупка", "Платформа"}:
+            attributes.setdefault(label, value)
     return {key: value for key, value in {
-        **item, "price": item["price"] or None, "reason": reason,
-    }.items() if key != "exact"}
+        **item, "name": unescape(item["name"]), "attributes": attributes,
+        "price": item["price"] or None, "reason": reason,
+    }.items() if key not in {"exact", "description"}}
+
+
+def matches_product_variant(item, query, versions):
+    if item["exact"]:
+        return True
+    if not matching_version(item, versions):
+        return False
+    # CSP TLS использует CSP, но это отдельное расширение.
+    if versions and re.search(r"\bcsp\b", query, re.IGNORECASE):
+        tls_requested = bool(re.search(r"\btls\b", query, re.IGNORECASE))
+        tls_product = bool(re.search(r"\bcsp\s+tls\b", item["name"], re.IGNORECASE))
+        return tls_requested == tls_product
+    return True
 
 
 def assemble_results(connection, snapshot, query, lexical, semantic):
@@ -174,7 +197,7 @@ def assemble_results(connection, snapshot, query, lexical, semantic):
     lexical_ids = {item["offer_id"] for item in lexical}
     results = [as_card(item, "Совпадение артикула или ID" if item["exact"] else (
         "Совпадение по каталогу" if item["offer_id"] in lexical_ids else "Похожее назначение продукта"
-    )) for item in merged if item["exact"] or matching_version(item, versions)][:4]
+    )) for item in merged if matches_product_variant(item, query, versions)][:4]
     if not results:
         return results, [], []
     top = results[0]

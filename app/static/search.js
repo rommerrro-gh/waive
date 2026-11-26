@@ -24,8 +24,9 @@ function productCard(item) {
       .format(Number(item.price));
   addText(card, "p", price + " · " + (item.available ? "В наличии" : "Недоступно"));
   addText(card, "p", item.reason);
-  for (const key of ["Версия", "Срок действия", "Модель лицензирования"]) {
-    if (item.attributes[key]) addText(card, "p", key + ": " + item.attributes[key]);
+  for (const key of ["Версия", "Срок действия", "Модель лицензирования", "Тип лицензии", "Минимальная покупка"]) {
+    const value = item.attributes[key];
+    if (value && value.toLowerCase() !== "не определено") addText(card, "p", key + ": " + value);
   }
   if (/^https?:\/\//i.test(item.url || "")) addText(card, "a", "Карточка на Softline").href = item.url;
   return card;

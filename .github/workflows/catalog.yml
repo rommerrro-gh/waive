@@ -60,11 +60,18 @@ jobs:
           time docker compose run --rm api python -m app.index_semantic
           docker compose exec -T api python - < tests/semantic_smoke.py
           docker compose exec -T api python - < scripts/evaluate.py > search-evaluation.jsonl
+          python3 -c 'import json; [print({k: v for k, v in json.loads(line).items() if k != "rows"}) for line in open("search-evaluation.jsonl")]'
+      - name: Измерить задержку под пробной нагрузкой
+        run: |
+          python3 scripts/measure.py --mode lexical --requests 120 --rps 10 | tee search-load.jsonl
+          python3 scripts/measure.py --mode hybrid --requests 120 --rps 10 | tee -a search-load.jsonl
       - name: Сохранить отчёт о качестве поиска
         uses: actions/upload-artifact@v4
         with:
           name: search-evaluation
-          path: search-evaluation.jsonl
+          path: |
+            search-evaluation.jsonl
+            search-load.jsonl
       - name: Проверить поиск при отказе модели
         run: |
           docker compose stop inference
