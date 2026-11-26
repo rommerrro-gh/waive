@@ -17,6 +17,13 @@
         <input id="analytics-token" type="password" required autocomplete="off">
         <button type="submit">Обновить</button>
       </div>
+      <label class="demo-mode">Профиль закупки
+        <select id="analytics-profile">
+          <option value="">Все запросы</option>
+          <option value="true">С профилем</option>
+          <option value="false">Без профиля</option>
+        </select>
+      </label>
       <label class="demo-mode"><input id="analytics-demo" type="checkbox"> Только демо-запросы</label>
     </form>
     <p id="analytics-status" role="status"></p>

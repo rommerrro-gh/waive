@@ -35,7 +35,7 @@ SEARCH_OFFERS = """
         FROM matches
         GROUP BY id
     )
-    SELECT o.id AS offer_id, o.group_id, o.category_id, o.name, o.vendor, o.url,
+    SELECT o.id AS offer_id, o.vendor_code, o.group_id, o.category_id, o.name, o.vendor, o.url,
         o.price, o.currency, o.available, o.attributes, left(o.description, 1200) AS description, c.exact
     FROM candidates c
     JOIN offer o ON o.snapshot_id = %(snapshot)s AND o.id = c.id
@@ -47,7 +47,7 @@ SEARCH_OFFERS = """
 """
 
 FUZZY_OFFERS = """
-    SELECT o.id AS offer_id, o.group_id, o.category_id, o.name, o.vendor, o.url,
+    SELECT o.id AS offer_id, o.vendor_code, o.group_id, o.category_id, o.name, o.vendor, o.url,
         o.price, o.currency, o.available, o.attributes, left(o.description, 1200) AS description, false AS exact
     FROM offer_search s
     JOIN offer o ON (o.snapshot_id, o.id) = (s.snapshot_id, s.offer_id)
@@ -69,7 +69,7 @@ NEARBY_FAMILIES = """
 """
 
 FAMILY_OFFERS = """
-    SELECT o.id AS offer_id, o.group_id, o.category_id, o.name, o.vendor, o.url,
+    SELECT o.id AS offer_id, o.vendor_code, o.group_id, o.category_id, o.name, o.vendor, o.url,
         o.price, o.currency, o.available, o.attributes, left(o.description, 1200) AS description,
         false AS exact
     FROM unnest(%(families)s::text[]) WITH ORDINALITY AS family(id, rank)
@@ -133,7 +133,7 @@ SEMANTIC_OFFERS = """
         ORDER BY distance
         LIMIT 25
     )
-    SELECT o.id AS offer_id, o.group_id, o.category_id, o.name, o.vendor, o.url,
+    SELECT o.id AS offer_id, o.vendor_code, o.group_id, o.category_id, o.name, o.vendor, o.url,
         o.price, o.currency, o.available, o.attributes, left(o.description, 1200) AS description, false AS exact
     FROM nearest n
     CROSS JOIN LATERAL (
@@ -150,7 +150,7 @@ SEMANTIC_OFFERS = """
 """
 
 COMPLEMENT_CANDIDATES = """
-    SELECT id AS offer_id, group_id, category_id, name, vendor, url,
+    SELECT id AS offer_id, vendor_code, group_id, category_id, name, vendor, url,
         price, currency, available, attributes, left(description, 1200) AS description
     FROM offer
     WHERE snapshot_id = %(snapshot)s AND category_id = %(category)s
@@ -180,7 +180,7 @@ CATEGORY_CANDIDATES = """
         ORDER BY available DESC, family_position, (price > 0) DESC NULLS LAST, id
         LIMIT 25
     )
-    SELECT o.id AS offer_id, o.group_id, o.category_id, o.name, o.vendor, o.url,
+    SELECT o.id AS offer_id, o.vendor_code, o.group_id, o.category_id, o.name, o.vendor, o.url,
         o.price, o.currency, o.available, o.attributes, left(o.description, 1200) AS description, false AS exact
     FROM selected s JOIN offer o ON o.id = s.id AND o.snapshot_id = %(snapshot)s
     ORDER BY s.available DESC, s.family_position, (s.price > 0) DESC NULLS LAST, s.id
@@ -420,7 +420,7 @@ def purchase_family_offers(connection, snapshot, matching, query, versions):
     if not families:
         return matching
     rows = connection.execute("""
-        SELECT id AS offer_id, group_id, category_id, name, vendor, url, price, currency,
+        SELECT id AS offer_id, vendor_code, group_id, category_id, name, vendor, url, price, currency,
                available, attributes, left(description, 1200) AS description, false AS exact
         FROM offer WHERE snapshot_id = %s AND group_id = ANY(%s)
         ORDER BY available DESC, id
@@ -458,6 +458,9 @@ def assemble_results(connection, snapshot, query, lexical, semantic, filters=Non
     )) for item in select_families(matching)[:4]]
     for card in results:
         card["match_type"] = "direct"
+        card["bundle_available"] = (
+            card["category_id"] in RECOMMENDATIONS and bool(platform_values(card))
+        )
     recommendations = fill_recommendations(connection, snapshot, query, results, (filters or {}).get("platform"))
     return results, [], recommendations
 

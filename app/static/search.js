@@ -56,13 +56,13 @@ function addProductLink(parent, item, requestId) {
   }
 }
 
-function renderSection(id, cards, requestId) {
+function renderSection(id, cards, requestId, context) {
   const section = document.querySelector("#" + id);
   section.hidden = !cards.length;
-  section.querySelector(".cards").replaceChildren(...cards.map(item => productCard(item, requestId)));
+  section.querySelector(".cards").replaceChildren(...cards.map(item => productCard(item, requestId, context)));
 }
 
-function productCard(item, requestId) {
+function productCard(item, requestId, context) {
   const card = document.createElement("article");
   addText(card, "h2", item.name);
   addText(card, "p", priceLabel(item) + " · " + availabilityLabel(item));
@@ -84,6 +84,7 @@ function productCard(item, requestId) {
     syncComparison();
   });
   renderCompareButton(button);
+  if (context) addProcurementActions(card, actions, item, context);
   return card;
 }
 
@@ -202,6 +203,7 @@ function closeSuggestions() {
 
 function acceptSuggestion(value) {
   query.value = value;
+  restoreForNewQuery();
   closeSuggestions();
   form.requestSubmit();
 }
@@ -230,6 +232,7 @@ async function fetchSuggestions(prefix) {
 }
 
 query.addEventListener("input", event => {
+  if (!event.isComposing) restoreForNewQuery();
   closeSuggestions();
   const prefix = query.value.trim();
   if (!event.isComposing && prefix.length >= 2 && prefix.length <= 120) {
@@ -260,6 +263,7 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   closeSuggestions();
   activeSearch?.abort();
+  clearBundle();
   const controller = new AbortController();
   activeSearch = controller;
   results.replaceChildren();
@@ -273,6 +277,9 @@ form.addEventListener("submit", async (event) => {
   const params = new URLSearchParams(new FormData(form));
   for (const key of Object.keys(filterNames)) if (!params.get(key)) params.delete(key);
   params.set("track", "true");
+  if (profile) params.set("with_profile", "true");
+  lastProcurementQuery = query.value.trim();
+  const count = workplaces.value;
   if (document.querySelector("#lexical").checked) params.set("semantic", "false");
   try {
     const response = await fetch("/search?" + params, { signal: controller.signal });
@@ -280,9 +287,10 @@ form.addEventListener("submit", async (event) => {
     const data = await response.json();
     if (controller.signal.aborted) return;
     const requestId = data.tracked ? data.request_id : undefined;
-    results.replaceChildren(...data.results.map(item => productCard(item, requestId)));
-    renderSection("alternatives", data.alternatives);
-    renderSection("recommendations", data.recommendations, requestId);
+    const context = {version: data.catalog_version, platform: params.get("platform"), count};
+    results.replaceChildren(...data.results.map(item => productCard(item, requestId, context)));
+    renderSection("alternatives", data.alternatives, undefined, context);
+    renderSection("recommendations", data.recommendations, requestId, context);
     showFilters(data);
     status.textContent = data.clarification || (data.search_mode === "hybrid" ?
       "Результаты поиска по тексту и смыслу" : "Результаты текстового поиска");

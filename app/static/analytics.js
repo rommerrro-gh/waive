@@ -43,8 +43,11 @@ form.addEventListener("submit", async event => {
   dashboard.hidden = true;
   status.textContent = "Загружаем отчёт…";
   const demo = document.querySelector("#analytics-demo").checked;
+  const params = new URLSearchParams({demo});
+  const profile = document.querySelector("#analytics-profile").value;
+  if (profile) params.set("with_profile", profile);
   try {
-    const response = await fetch("/analytics/report?demo=" + demo, {
+    const response = await fetch("/analytics/report?" + params, {
       headers: {"X-Analytics-Token": document.querySelector("#analytics-token").value},
       cache: "no-store", signal: controller.signal,
     });

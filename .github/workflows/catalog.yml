@@ -16,6 +16,7 @@ jobs:
         run: |
           node --check app/static/search.js
           node --check app/static/analytics.js
+          node --check app/static/procurement.js
           python3 -m unittest discover -s tests
       - name: Загрузить реальный каталог
         run: |
@@ -31,6 +32,7 @@ jobs:
       - name: Проверить подсказки и сравнение в Chrome
         run: |
           npm install --no-save --package-lock=false playwright@1.56.1
+          export BUNDLE_SMOKE_OFFER="$(docker compose exec -T db psql -U waive -d waive -At -c "SELECT id FROM offer JOIN active_catalog USING (snapshot_id) WHERE group_id = '391338' AND available ORDER BY id LIMIT 1")"
           CHROME_BIN="$(command -v google-chrome)" node tests/ui_smoke.cjs
       - name: Диагностика
         if: failure()

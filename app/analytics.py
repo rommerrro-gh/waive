@@ -18,6 +18,7 @@ GROUPS = """
            count(*) FILTER (WHERE direct_clicked) AS direct_clicks
     FROM search_event
     WHERE demo = %s AND created_at >= now() - interval '30 days'
+      AND (%s::boolean IS NULL OR with_profile = %s)
     GROUP BY query_group, filters, reason
     HAVING reason <> 'full' OR (count(*) >= 3 AND NOT bool_or(direct_clicked))
     ORDER BY searches DESC, query_group, reason, filters
@@ -44,16 +45,16 @@ def miss_reason(diagnostics):
     return "few_matches" if diagnostics["families_after"] < 4 else "full"
 
 
-def record_search(connection, request_id, query, filters, diagnostics, items, recommendations, demo):
+def record_search(connection, request_id, query, filters, diagnostics, items, recommendations, demo, with_profile):
     # Поисковая строка может содержать контакты. Сохраняем только группу с маскировкой.
     group = re.sub(r"\S+@\S+|https?://\S+|\+?\d[\d ()-]{8,}\d", "[скрыто]", query.casefold())
     try:
         with connection.transaction():
             connection.execute("""
                 INSERT INTO search_event
-                    (id, demo, query_group, filters, reason, direct_count, direct_ids, recommendation_ids)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (request_id, demo, group, Jsonb(filters), miss_reason(diagnostics), len(items),
+                    (id, demo, with_profile, query_group, filters, reason, direct_count, direct_ids, recommendation_ids)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (request_id, demo, with_profile, group, Jsonb(filters), miss_reason(diagnostics), len(items),
                   [item["offer_id"] for item in items], [item["offer_id"] for item in recommendations]))
     except Error:
         logger.warning("Событие поиска не записано")
@@ -84,13 +85,17 @@ def record_click(event: Click, request: Request):
 
 
 @router.get("/analytics/report")
-def report(request: Request, response: Response, demo: bool = False, x_analytics_token: str = Header("")):
+def report(
+    request: Request, response: Response, demo: bool = False,
+    with_profile: bool | None = None, x_analytics_token: str = Header(""),
+):
     token = os.getenv("ANALYTICS_TOKEN")
     if not token:
         raise HTTPException(503, "Аналитика выключена")
     if not compare_digest(token.encode(), x_analytics_token.encode()):
         raise HTTPException(403, "Проверьте ключ аналитики")
     response.headers["Cache-Control"] = "no-store"
+    segment = (demo, with_profile, with_profile)
     try:
         with request.app.state.pool.connection() as connection:
             metrics = connection.execute("""
@@ -101,8 +106,9 @@ def report(request: Request, response: Response, demo: bool = False, x_analytics
                        count(*) FILTER (WHERE recommendation_clicked) AS recommendation_clicks
                 FROM search_event
                 WHERE demo = %s AND created_at >= now() - interval '30 days'
-            """, (demo,)).fetchone()
-            rows = connection.execute(GROUPS, (demo,)).fetchall()
+                  AND (%s::boolean IS NULL OR with_profile = %s)
+            """, segment).fetchone()
+            rows = connection.execute(GROUPS, segment).fetchall()
     except (Error, PoolTimeout) as error:
         raise HTTPException(503, "Аналитика временно недоступна") from error
     return {"metrics": metrics, "groups": rows, "days": 30}

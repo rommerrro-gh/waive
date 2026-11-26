@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { readFile } = require("node:fs/promises");
 const { chromium } = require("playwright");
 
 async function main() {
@@ -56,6 +57,45 @@ async function main() {
     await page.getByRole("button", { name: "Применить: 12 месяцев" }).click();
     await page.locator("#results article").first().waitFor();
     assert.equal(await page.locator("select[name=term]").inputValue(), "12");
+    await page.locator("select[name=platform]").selectOption("windows");
+    await page.getByRole("spinbutton", {name: "Рабочих мест"}).fill("50");
+    await page.getByRole("button", {name: "Сохранить профиль закупки"}).click();
+    await page.reload();
+    assert.equal(await page.locator("select[name=platform]").inputValue(), "windows");
+    assert.equal(await page.getByRole("spinbutton", {name: "Рабочих мест"}).inputValue(), "50");
+    await input.fill("антивирус для рабочих станций");
+    await page.locator("input[name=demo]").check();
+    await page.getByRole("button", {name: "Найти"}).click();
+    const first = page.locator("#results article").first();
+    await first.getByRole("button", {name: "На согласование"}).click();
+    await page.getByRole("button", {name: "Черновик запроса КП"}).click();
+    assert.match(await page.locator("#quote-text").inputValue(), /покрытие 50 рабочих мест/);
+    for (const [button, expected, content] of [
+      ["Скачать CSV", "waive-approval.csv", /"Рабочие места".*"50"/s],
+      ["Скачать черновик TXT", "waive-quote-request.txt", /покрытие 50 рабочих мест/],
+    ]) {
+      const started = page.waitForEvent("download");
+      await page.getByRole("button", {name: button, exact: true}).click();
+      const result = await started;
+      assert.equal(result.suggestedFilename(), expected);
+      assert.match(await readFile(await result.path(), "utf8"), content);
+    }
+    await page.locator("select[name=platform]").selectOption("linux");
+    await input.fill("офисный пакет");
+    assert.equal(await page.locator("select[name=platform]").inputValue(), "windows");
+    await page.reload();
+    await page.getByText("Список на согласование · 1").waitFor();
+    assert.ok(process.env.BUNDLE_SMOKE_OFFER);
+    await page.getByRole("button", {name: "Удалить профиль"}).click();
+    await page.locator("select[name=platform]").selectOption("");
+    await page.locator("select[name=term]").selectOption("");
+    await input.fill(process.env.BUNDLE_SMOKE_OFFER);
+    await page.getByRole("button", {name: "Найти"}).click();
+    await page.locator("#results article").first().getByRole("button", {name: "Подобрать комплект"}).click();
+    const bundle = page.getByRole("region", {name: "Комплект для компании"});
+    await bundle.getByText(/проверена совместимость по платформе/).waitFor();
+    await bundle.locator("article").nth(1).getByRole("button", {name: "На согласование"}).click();
+    await page.getByText("Список на согласование · 2").waitFor();
     await page.getByRole("link", { name: "Аналитика поиска" }).click();
     await page.getByLabel("Ключ аналитики").fill(process.env.ANALYTICS_TOKEN);
     await page.getByLabel("Только демо-запросы").check();

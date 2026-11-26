@@ -1,0 +1,224 @@
+const profileKey = "waive-purchase-profile-v1";
+const approvalKey = "waive-approval-v1";
+const workplaces = document.querySelector("#workplaces");
+const profileStatus = document.querySelector("#profile-status");
+const restoreProfile = document.querySelector("#restore-profile");
+const deleteProfile = document.querySelector("#delete-profile");
+const approval = document.querySelector("#approval");
+const approvalItems = document.querySelector("#approval-items");
+const csvButton = document.querySelector("#export-approval");
+const quotePreview = document.querySelector("#quote-preview");
+const quote = document.querySelector("#quote");
+const quoteText = document.querySelector("#quote-text");
+const bundle = document.querySelector("#bundle");
+const bundleMessage = document.querySelector("#bundle-message");
+let profile = readLocal(profileKey, null);
+let lastProcurementQuery;
+let bundleRequest;
+const saved = new Map(readLocal(approvalKey, []).map(entry => [entry.item.offer_id, entry]));
+
+function readLocal(key, fallback) {
+  try {
+    return JSON.parse(localStorage.getItem(key)) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveLocal(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function applyProfile() {
+  for (const key of Object.keys(filterNames)) {
+    const select = form.elements[key];
+    const value = profile[key] || "";
+    if (key === "term" && /^\d{1,3}$/.test(value) && !Array.from(select.options).some(option => option.value === value)) {
+      select.add(new Option(value + " мес.", value));
+    }
+    select.value = value;
+  }
+  workplaces.value = profile.count || "";
+}
+
+function updateProfileControls(message = "") {
+  restoreProfile.hidden = deleteProfile.hidden = !profile;
+  profileStatus.textContent = message || (profile ? "Профиль активен. Изменения фильтров действуют для текущего поиска." : "");
+}
+
+function restoreForNewQuery() {
+  if (profile && lastProcurementQuery != null && query.value.trim() !== lastProcurementQuery) {
+    applyProfile();
+    lastProcurementQuery = undefined;
+  }
+}
+
+document.querySelector("#save-profile").addEventListener("click", () => {
+  if (!workplaces.reportValidity()) return;
+  const fields = Object.fromEntries(Object.keys(filterNames).map(key => [key, form.elements[key].value]));
+  profile = {...fields, count: workplaces.value};
+  updateProfileControls(saveLocal(profileKey, profile) ? "Профиль сохранён в этом браузере." : "Профиль доступен до закрытия страницы.");
+});
+restoreProfile.addEventListener("click", applyProfile);
+deleteProfile.addEventListener("click", () => {
+  profile = null;
+  updateProfileControls(saveLocal(profileKey, null) ? "Профиль удалён." : "Не удалось удалить сохранённый профиль из браузера.");
+});
+if (profile) applyProfile();
+updateProfileControls();
+
+function requirements(entry) {
+  const checks = [];
+  if (entry.count) checks.push("Подтвердить покрытие " + entry.count + " рабочих мест");
+  if (entry.item.price == null) checks.push("Уточнить цену");
+  if (!entry.item.available) checks.push("Уточнить наличие и срок поставки");
+  return checks;
+}
+
+function positionId(item) {
+  return item.vendor_code ? "арт. " + item.vendor_code : "ID каталога " + item.offer_id;
+}
+
+function renderApproval() {
+  document.querySelector("#approval-count").textContent = "Список на согласование · " + saved.size;
+  document.querySelector("#approval-empty").hidden = saved.size > 0;
+  approvalItems.replaceChildren();
+  for (const entry of saved.values()) {
+    const {item, anchor} = entry;
+    const row = addText(approvalItems, "li", "");
+    addText(row, "strong", item.name);
+    addText(row, "p", positionId(item) + " · " + priceLabel(item));
+    if (anchor) addText(row, "p", "Дополнение к «" + anchor + "» · " + item.reason);
+    for (const check of requirements(entry)) addText(row, "p", check);
+    const actions = addText(row, "div", "");
+    actions.className = "card-actions";
+    addProductLink(actions, item);
+    filterButton(actions, "Убрать позицию", () => toggleApproval(entry));
+  }
+  csvButton.disabled = quotePreview.disabled = saved.size === 0;
+  if (!saved.size) quote.hidden = true;
+  document.querySelectorAll("button[data-approval-id]").forEach(updateApprovalButton);
+}
+
+function toggleApproval(entry) {
+  const id = entry.item.offer_id;
+  if (saved.has(id)) saved.delete(id);
+  else {
+    saved.set(id, entry);
+    approval.open = true;
+  }
+  saveLocal(approvalKey, Array.from(saved.values()));
+  quote.hidden = true;
+  renderApproval();
+}
+
+function updateApprovalButton(button) {
+  const included = saved.has(button.dataset.approvalId);
+  button.textContent = included ? "Убрать из списка" : "На согласование";
+  button.setAttribute("aria-pressed", String(included));
+}
+
+function addProcurementActions(card, actions, item, context) {
+  const {count, anchor} = context;
+  if (count) addText(card, "p", "Уточнить лицензию для " + count + " рабочих мест.");
+  const button = addText(actions, "button", "");
+  button.type = "button";
+  button.className = "secondary";
+  button.dataset.approvalId = item.offer_id;
+  button.addEventListener("click", () => toggleApproval({item, count, anchor}));
+  updateApprovalButton(button);
+  if (!anchor && item.bundle_available) {
+    filterButton(actions, "Подобрать комплект", () => loadBundle(item, context));
+  }
+}
+
+function clearBundle() {
+  bundleRequest?.abort();
+  bundle.hidden = true;
+  bundle.querySelector(".cards").replaceChildren();
+}
+
+async function loadBundle(anchor, context) {
+  clearBundle();
+  const controller = new AbortController();
+  bundleRequest = controller;
+  bundle.hidden = false;
+  bundleMessage.textContent = "Подбираем дополнения к «" + anchor.name + "»…";
+  bundle.scrollIntoView({block: "nearest"});
+  const params = new URLSearchParams({offer_id: anchor.offer_id, catalog_version: context.version});
+  if (context.platform) params.set("platform", context.platform);
+  try {
+    const response = await fetch("/bundle?" + params, {signal: controller.signal});
+    const data = await response.json();
+    if (controller.signal.aborted) return;
+    if (!response.ok) throw new Error(data.detail);
+    bundleMessage.textContent = data.items.length
+      ? "Основная позиция — " + anchor.name + ". Для дополнений проверена совместимость по платформе."
+      : "Проверенные дополнения к «" + anchor.name + "» не найдены.";
+    if (!data.items.length) return;
+    const cards = [
+      productCard({...data.anchor, bundle_available: false}, undefined, context),
+      ...data.items.map(item => productCard(item, undefined, {...context, anchor: anchor.name})),
+    ];
+    bundle.querySelector(".cards").replaceChildren(...cards);
+  } catch (error) {
+    if (error.name !== "AbortError") bundleMessage.textContent = error.message || "Не удалось подобрать комплект.";
+  }
+}
+
+function download(name, content, type) {
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([content], {type}));
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
+function csvCell(value) {
+  const text = String(value ?? "");
+  const safe = /^[\s\uFEFF]*[=+@-]|^[\t\r\n]/.test(text) ? "'" + text : text;
+  return '"' + safe.replaceAll('"', '""') + '"';
+}
+
+csvButton.addEventListener("click", () => {
+  const rows = [["Предложение", "Артикул", "ID каталога", "Цена из каталога", "Наличие",
+    "Платформа", "Срок действия", "Тип лицензии", "Рабочие места", "Дополнение к", "Что уточнить", "Ссылка"]];
+  for (const {item, count, anchor} of saved.values()) {
+    rows.push([item.name, item.vendor_code, item.offer_id, priceLabel(item), availabilityLabel(item),
+      attributeValue(item, "Платформа", "Поддерживаемые ОС"), attributeValue(item, "Срок действия"),
+      attributeValue(item, "Тип лицензии"), count, anchor,
+      requirements({item, count}).join(". "), item.url]);
+  }
+  download("waive-approval.csv", "\uFEFF" + rows.map(row => row.map(csvCell).join(";")).join("\r\n"),
+    "text/csv;charset=utf-8");
+});
+
+quotePreview.addEventListener("click", () => {
+  const lines = ["Здравствуйте!", "", "Просим подготовить коммерческое предложение по следующим позициям:", ""];
+  for (const [index, {item, count, anchor}] of Array.from(saved.values()).entries()) {
+    lines.push((index + 1) + ". " + item.name + " (" + positionId(item) + ")");
+    if (anchor) lines.push("   Дополнение к «" + anchor + "».");
+    for (const [label, value] of [
+      ["Платформа", attributeValue(item, "Платформа", "Поддерживаемые ОС")],
+      ["Срок лицензии", attributeValue(item, "Срок действия")],
+      ["Тип лицензии", attributeValue(item, "Тип лицензии")],
+    ]) if (value) lines.push("   " + label + " — " + value + ".");
+    for (const check of requirements({item, count})) lines.push("   " + check + ".");
+    if (item.url) lines.push("   " + item.url);
+    lines.push("");
+  }
+  lines.push("Пожалуйста, укажите итоговую стоимость с НДС, срок поставки и срок действия предложения.");
+  quoteText.value = lines.join("\n");
+  quote.hidden = false;
+  quoteText.focus();
+});
+
+document.querySelector("#quote-download").addEventListener("click", () => {
+  download("waive-quote-request.txt", quoteText.value, "text/plain;charset=utf-8");
+});
+renderApproval();

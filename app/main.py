@@ -15,9 +15,12 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool, PoolTimeout
 
 from app.analytics import configured, record_search, router
-from app.procurement import LICENSE_TYPES, PLATFORMS, requested_filters
+from app.procurement import LICENSE_TYPES, PLATFORMS, purchase_values, requested_filters
 from app.embeddings import vector_literal, vectors
-from app.search import SEMANTIC_OFFERS, assemble_results, lexical_candidates, suggest_families
+from app.search import (
+    SEMANTIC_OFFERS, as_card, assemble_results, fill_recommendations, lexical_candidates,
+    suggest_families,
+)
 
 logger = logging.getLogger(__name__)
 inference_slots = BoundedSemaphore(4)
@@ -104,6 +107,7 @@ def find_products(
     license_type: Literal[*LICENSE_TYPES] | None = None,
     track: bool = False,
     demo: bool = False,
+    with_profile: bool = False,
 ):
     query = " ".join(q.split())
     if not query:
@@ -133,7 +137,9 @@ def find_products(
                 connection, snapshot, query, lexical, semantic_rows, filters, diagnostics,
             )
             if track:
-                track = record_search(connection, request_id, query, filters, diagnostics, items, recommendations, demo)
+                track = record_search(
+                    connection, request_id, query, filters, diagnostics, items, recommendations, demo, with_profile,
+                )
     except (OperationalError, PoolTimeout, QueryCanceled) as error:
         raise HTTPException(503, "Поиск временно недоступен") from error
     return {
@@ -154,6 +160,34 @@ def find_products(
         "catalog_version": snapshot,
         "request_id": str(request_id),
     }
+
+
+@app.get("/bundle")
+def company_bundle(
+    offer_id: Annotated[str, Query(min_length=1, max_length=100)],
+    catalog_version: Annotated[int, Query(gt=0)],
+    platform: Literal[*PLATFORMS] | None = None,
+):
+    try:
+        with app.state.pool.connection() as connection, connection.transaction():
+            active = connection.execute("SELECT snapshot_id FROM active_catalog").fetchone()
+            if not active or active["snapshot_id"] != catalog_version:
+                raise HTTPException(409, "Каталог обновился. Повторите поиск")
+            row = connection.execute("""
+                SELECT id AS offer_id, vendor_code, group_id, category_id, name, vendor, url,
+                       price, currency, available, attributes, left(description, 1200) AS description
+                FROM offer WHERE snapshot_id = %s AND id = %s
+            """, (catalog_version, offer_id)).fetchone()
+            if not row:
+                raise HTTPException(404, "Предложение не найдено")
+            anchor = as_card(row, "Основная позиция")
+            if platform and platform not in purchase_values(anchor["attributes"])["platform"]:
+                raise HTTPException(422, "Платформа основной позиции не подтверждена")
+            return {"anchor": anchor, "items": fill_recommendations(
+                connection, catalog_version, "", [anchor], platform
+            )}
+    except (OperationalError, PoolTimeout, QueryCanceled) as error:
+        raise HTTPException(503, "Подбор комплекта временно недоступен") from error
 
 
 app.mount("/", StaticFiles(directory=Path(__file__).with_name("static"), html=True), name="ui")

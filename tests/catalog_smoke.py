@@ -54,7 +54,7 @@ from app.procurement import purchase_values
 
 query = "антивирус для рабочих станций компании"
 matched = get("/search?" + urlencode({
-    "q": query, "platform": "windows", "term": "12", "track": "true", "demo": "true",
+    "q": query, "platform": "windows", "term": "12", "track": "true", "demo": "true", "with_profile": "true",
 }))
 assert matched["results"], matched
 for item in matched["results"]:
@@ -81,3 +81,17 @@ assert report["metrics"]["direct_clicks"] == 1, report
 assert any(row["reason"] == "filter.term" for row in report["groups"]), report
 assert get("/analytics/report", headers)["metrics"]["searches"] == 0
 print("Проверены закупочные условия, причины промахов и отдельная статистика демо")
+
+assert get("/analytics/report?demo=true&with_profile=true", headers)["metrics"]["searches"] == 1
+assert get("/analytics/report?demo=true&with_profile=false", headers)["metrics"]["empty"] == 1
+bundle = get("/bundle?" + urlencode({"offer_id": office_id, "catalog_version": ready["catalog_version"]}))
+assert bundle["anchor"]["offer_id"] == office_id and bundle["items"], bundle
+for item in bundle["items"]:
+    assert item["compatibility"]["source_offer_id"] == office_id, item
+    assert item["compatibility"]["matched_platforms"], item
+try:
+    get("/bundle?" + urlencode({"offer_id": office_id, "catalog_version": ready["catalog_version"] + 1}))
+except HTTPError as error:
+    assert error.code == 409
+else:
+    raise AssertionError("Комплект должен собираться на версии каталога из выдачи")

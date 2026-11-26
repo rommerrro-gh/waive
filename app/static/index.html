@@ -6,6 +6,7 @@
   <title>Waive | Поиск по каталогу</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/search.js" defer></script>
+  <script src="/procurement.js" defer></script>
 </head>
 <body>
   <main>
@@ -56,6 +57,15 @@
             <option value="upgrade">Обновление</option>
           </select>
         </label>
+        <label>Рабочих мест
+          <input id="workplaces" type="number" min="1" max="1000000" step="1" placeholder="Например, 50">
+        </label>
+        <div class="profile-actions card-actions">
+          <button id="save-profile" class="secondary" type="button">Сохранить профиль закупки</button>
+          <button id="restore-profile" class="secondary" type="button" hidden>Подставить профиль</button>
+          <button id="delete-profile" class="secondary" type="button" hidden>Удалить профиль</button>
+          <span id="profile-status" role="status"></span>
+        </div>
       </fieldset>
       <label class="demo-mode"><input name="demo" type="checkbox" value="true"> Записывать как демо</label>
       <div id="filter-suggestions" class="card-actions" aria-label="Предложенные фильтры" hidden></div>
@@ -65,10 +75,29 @@
       <div id="comparison-items"></div>
       <button id="open-comparison" type="button" disabled>Сравнить предложения</button>
     </section>
+    <details id="approval" class="approval">
+      <summary id="approval-count">Список на согласование · 0</summary>
+      <p id="approval-empty">Добавьте предложения из поиска или комплекта.</p>
+      <ul id="approval-items"></ul>
+      <div class="card-actions">
+        <button id="export-approval" type="button" class="secondary" disabled>Скачать CSV</button>
+        <button id="quote-preview" type="button" disabled>Черновик запроса КП</button>
+      </div>
+      <section id="quote" hidden>
+        <label for="quote-text">Текст запроса коммерческого предложения</label>
+        <textarea id="quote-text" rows="12"></textarea>
+        <button id="quote-download" type="button" class="secondary">Скачать черновик TXT</button>
+      </section>
+    </details>
     <p id="status" role="status"></p>
     <div id="filter-details" class="card-actions" hidden></div>
     <section id="results" class="cards" aria-label="Результаты поиска"></section>
     <section id="alternatives" hidden><h2>Альтернативы</h2><div class="cards"></div></section>
+    <section id="bundle" class="approval" hidden aria-labelledby="bundle-title">
+      <h2 id="bundle-title">Комплект для компании</h2>
+      <p id="bundle-message" role="status"></p>
+      <div class="cards"></div>
+    </section>
     <section id="recommendations" hidden><h2>Допродажи с проверкой характеристик</h2><div class="cards"></div></section>
   </main>
   <dialog id="comparison" aria-labelledby="comparison-title">
