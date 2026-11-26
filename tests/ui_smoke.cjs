@@ -21,6 +21,22 @@ async function main() {
     assert.equal(await page.getByRole("spinbutton", {name: "Цена от, ₽"}).isVisible(), true);
     await filters.click();
     assert.equal(await stock.isVisible(), false);
+    await input.fill("майкр");
+    await input.press("Escape");
+    await page.waitForTimeout(350);
+    assert.equal(await input.inputValue(), "майкр");
+    assert.equal(await input.getAttribute("aria-expanded"), "false");
+    await input.fill("???");
+    await input.press("Enter");
+    await page.getByText("Введите название, бренд или артикул от двух символов.", {exact: true}).waitFor();
+    await input.evaluate(field => {
+      field.value = "фтнвуыл";
+      field.dispatchEvent(new InputEvent("input", {bubbles: true, isComposing: true}));
+      field.dispatchEvent(new CompositionEvent("compositionend", {bubbles: true}));
+    });
+    await page.getByRole("option", {name: "AnyDesk", exact: true}).waitFor();
+    await input.clear();
+    assert.equal(await input.getAttribute("aria-expanded"), "false");
     await input.fill("каспер");
     await page.getByRole("option", {name: "Kaspersky", exact: true}).waitFor();
     await input.press("ArrowDown");

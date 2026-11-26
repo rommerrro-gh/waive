@@ -19,8 +19,8 @@ from app.analytics import configured, record_search, router
 from app.procurement import LICENSE_TYPES, PLATFORMS, purchase_values, requested_filters
 from app.embeddings import vector_literal, vectors
 from app.search import (
-    SEMANTIC_OFFERS, as_card, assemble_results, fill_recommendations, is_kaspersky_query, lexical_candidates,
-    suggest_families,
+    BRAND_BY_NAME, SEMANTIC_OFFERS, as_card, assemble_results, catalog_identifier, fill_recommendations,
+    is_kaspersky_query, lexical_candidates, resolve_search_input, suggest_families,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,7 +88,7 @@ def readiness():
 @app.get("/suggest")
 def suggest(q: Annotated[str, Query(max_length=120)]):
     query = " ".join(q.split())
-    if len(query) < 2:
+    if len(query) < 2 or not any(char.isalnum() for char in query):
         return {"suggestions": []}
     try:
         with app.state.pool.connection() as connection:
@@ -115,8 +115,8 @@ def find_products(
     with_profile: bool = False,
 ):
     query = " ".join(q.split())
-    if not query:
-        raise HTTPException(422, "Введите поисковый запрос")
+    if len(query) < 2 or not any(char.isalnum() for char in query):
+        raise HTTPException(422, "Введите название, бренд или артикул от двух символов")
     if price_min is not None and price_max is not None and price_min > price_max:
         raise HTTPException(422, "Цена «От» должна быть не выше цены «До»")
     filters = {key: value for key, value in {
@@ -124,7 +124,9 @@ def find_products(
         "in_stock": in_stock or None, "price_min": price_min, "price_max": price_max,
     }.items() if value is not None}
     diagnostics = {}
-    brand_only = is_kaspersky_query(query)
+    lookup = resolve_search_input(query)
+    corrected = lookup.casefold() != query.casefold()
+    brand_only = is_kaspersky_query(lookup) or (corrected and lookup.casefold() in BRAND_BY_NAME)
     request_id = uuid4()
     track = track and configured()
     try:
@@ -135,15 +137,15 @@ def find_products(
             snapshot = active["snapshot_id"]
             revision = os.environ.get("MODEL_REVISION")
             indexed = None
-            if semantic and not brand_only and revision and os.environ.get("EMBEDDING_URL"):
+            if semantic and not brand_only and not catalog_identifier(query) and revision and os.environ.get("EMBEDDING_URL"):
                 indexed = connection.execute("""
                     SELECT 1 FROM semantic_catalog WHERE snapshot_id = %s AND model_revision = %s
                 """, (snapshot, revision)).fetchone()
-            future = request_vector(app.state.executor, query) if indexed else None
-            lexical = lexical_candidates(connection, snapshot, query)
+            future = request_vector(app.state.executor, lookup) if indexed else None
+            lexical = lexical_candidates(connection, snapshot, lookup)
             semantic_rows, used_model = semantic_candidates(connection, future, snapshot, revision)
             items, alternatives, recommendations = assemble_results(
-                connection, snapshot, query, lexical, semantic_rows, filters, diagnostics, expanded=expanded,
+                connection, snapshot, lookup, lexical, semantic_rows, filters, diagnostics, expanded=expanded,
             )
             if track:
                 track = record_search(
@@ -158,7 +160,7 @@ def find_products(
         "recommendations": recommendations,
         "applied_filters": filters,
         "suggested_filters": requested_filters(query),
-        "corrected_query": "Kaspersky" if brand_only and query.casefold() != "kaspersky" else None,
+        "corrected_query": lookup if corrected else None,
         "filter_diagnostics": diagnostics if filters else None,
         "tracked": track,
         "clarification": (

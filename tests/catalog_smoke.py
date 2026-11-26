@@ -62,6 +62,28 @@ for prefix, fragment in (
 ):
     suggestions = get("/suggest?" + urlencode({"q": prefix}))["suggestions"]
     assert any(fragment in option for option in suggestions), (prefix, suggestions)
+
+for query, fragment in (
+    ("анидеск", "anydesk"), ("фтнвуыл", "anydesk"), ("Any\u00a0Desk", "anydesk"),
+    ("rfcgthcrbq", "kaspersky"), ("майкр", "microsoft"), ("майкрософт Visio", "visio"),
+    ("винрар", "winrar"), ("логитек", "logitech"), ("920-009393", "920-009393"),
+):
+    query_params = urlencode({"q": query})
+    result = get("/search?" + query_params)
+    assert any(fragment in card["name"].casefold() for card in result["results"]), (query, result)
+    assert get("/suggest?" + query_params)["suggestions"], query
+assert any("Microsoft Office" in name for name in get("/suggest?q=" + office_id)["suggestions"])
+
+for query in ("", " ", "а", "???", "x" * 201):
+    try:
+        get("/search?" + urlencode({"q": query}))
+    except HTTPError as error:
+        assert error.code == 422, (query, error.code)
+    else:
+        raise AssertionError("Принят некорректный запрос: " + repr(query))
+for query in ("", " ", "а", "???", "zqjy939"):
+    assert get("/suggest?" + urlencode({"q": query}))["suggestions"] == [], query
+assert get("/search?q=zqjy939")["results"] == []
 office = get("/search?" + urlencode({"q": office_id, "semantic": "false"}))
 assert office["results"][0]["offer_id"] == office_id, office
 assert len(office["recommendations"]) > 0, office

@@ -236,6 +236,8 @@ function showFilters(data) {
 function closeSuggestions() {
   clearTimeout(suggestionTimer);
   activeSuggestion?.abort();
+  suggestionTimer = undefined;
+  activeSuggestion = undefined;
   activeOption = -1;
   suggestions.hidden = true;
   suggestions.replaceChildren();
@@ -273,21 +275,30 @@ async function fetchSuggestions(prefix) {
   }
 }
 
-query.addEventListener("input", event => {
-  if (!event.isComposing) restoreForNewQuery();
+function scheduleSuggestions() {
+  restoreForNewQuery();
   closeSuggestions();
   const prefix = query.value.trim();
-  if (!event.isComposing && prefix.length >= 2 && prefix.length <= 120) {
+  if (prefix.length >= 2 && prefix.length <= 120 && /[\p{L}\p{N}]/u.test(prefix)) {
     suggestionTimer = setTimeout(() => fetchSuggestions(prefix), 180);
   }
+}
+
+query.addEventListener("input", event => {
+  if (event.isComposing) closeSuggestions();
+  else scheduleSuggestions();
 });
+query.addEventListener("compositionend", scheduleSuggestions);
 query.addEventListener("blur", closeSuggestions);
 query.addEventListener("keydown", event => {
-  if (suggestions.hidden || event.isComposing) return;
+  if (event.isComposing) return;
   if (event.key === "Escape") {
-    event.preventDefault();
+    if (suggestionTimer || activeSuggestion || !suggestions.hidden) event.preventDefault();
     closeSuggestions();
-  } else if (event.key === "Enter" && activeOption >= 0) {
+    return;
+  }
+  if (suggestions.hidden) return;
+  if (event.key === "Enter" && activeOption >= 0) {
     event.preventDefault();
     acceptSuggestion(suggestions.children[activeOption].textContent);
   } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -346,6 +357,11 @@ form.addEventListener("submit", async (event) => {
   }
   renderSection("alternatives", []);
   renderSection("recommendations", []);
+  const entered = query.value.trim();
+  if (entered.length < 2 || !/[\p{L}\p{N}]/u.test(entered)) {
+    status.textContent = "Введите название, бренд или артикул от двух символов.";
+    return;
+  }
   status.textContent = "Ищем товары…";
   const params = new URLSearchParams(new FormData(form));
   for (const key of Object.keys(catalogFilterNames)) if (!params.get(key)) params.delete(key);

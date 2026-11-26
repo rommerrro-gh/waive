@@ -19,7 +19,7 @@ SUGGESTION_ALIASES = {
     "Kaspersky": KASPERSKY_NAMES,
     "Microsoft": ("майкрософт", "микрософт"),
     "Dr.Web": ("доктор веб", "докторвеб", "др веб", "др. веб", "dr web", "drweb"),
-    "AnyDesk": ("анидеск", "анидэск", "энидеск", "энидэск", "ани деск", "эни деск"),
+    "AnyDesk": ("any desk", "анидеск", "анидэск", "энидеск", "энидэск", "ани деск", "эни деск"),
     "WinRAR": ("винрар", "вин рар"),
     "Astra": ("астра",),
     "Astra Linux": ("астра линукс", "астра linux", "астралинукс"),
@@ -31,6 +31,19 @@ SUGGESTION_ALIASES = {
     "VMware": ("вмвар", "вмваре", "вмвэр"),
     "ESET": ("есет", "эсет"),
 }
+BRAND_BY_NAME = {
+    name: canonical
+    for canonical, aliases in SUGGESTION_ALIASES.items()
+    for name in (*aliases, canonical.casefold())
+}
+LEADING_BRAND = re.compile(
+    r"^(?:" + "|".join(map(re.escape, sorted(BRAND_BY_NAME, key=len, reverse=True))) + r")(?=\s)",
+    re.IGNORECASE,
+)
+LATIN_KEYS = "qwertyuiopasdfghjklzxcvbnm"
+CYRILLIC_KEYS = "йцукенгшщзфывапролдячсмить"
+TO_RUSSIAN = str.maketrans(LATIN_KEYS, CYRILLIC_KEYS)
+TO_ENGLISH = str.maketrans(CYRILLIC_KEYS, LATIN_KEYS)
 
 SEARCH_OFFERS = """
     WITH input AS MATERIALIZED (
@@ -534,12 +547,27 @@ SUGGEST_UNGROUPED = """
     LIMIT 6
 """
 
+SUGGEST_IDENTIFIER = """
+    SELECT DISTINCT name FROM offer
+    WHERE snapshot_id = %(snapshot)s AND available AND char_length(name) <= 200
+      AND (id = %(identifier)s OR lower(vendor_code) = %(identifier)s)
+    ORDER BY name
+    LIMIT 6
+"""
+
+
+def catalog_identifier(query):
+    return (
+        2 <= len(query) <= 100 and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9./_-]*", query) is not None
+        and any(char.isdigit() for char in query)
+    )
+
 
 def resolve_suggestion_alias(query):
     name = normal_form(query)
     if is_kaspersky_query(name):
         return "Kaspersky"
-    exact = next((canonical for canonical, aliases in SUGGESTION_ALIASES.items() if name in aliases), None)
+    exact = BRAND_BY_NAME.get(name)
     if exact or len(name) < 4:
         return exact
     matches = {
@@ -549,9 +577,37 @@ def resolve_suggestion_alias(query):
     return next(iter(matches)) if len(matches) == 1 else None
 
 
-def suggest_families(connection, snapshot, query):
+def known_brand(query):
     canonical = resolve_suggestion_alias(query)
-    lookup = canonical or normalize_query(query)
+    if canonical:
+        return canonical
+    name = normal_form(query)
+    if re.fullmatch(r"[a-z]{4,}", name):
+        return resolve_suggestion_alias(name.translate(TO_RUSSIAN))
+    if re.fullmatch(r"[а-яё]{4,}", name):
+        return resolve_suggestion_alias(name.translate(TO_ENGLISH))
+    return None
+
+
+def resolve_search_input(query):
+    brand = known_brand(query)
+    if brand:
+        return brand
+    leading = LEADING_BRAND.match(query)
+    if leading and normal_form(leading[0]) != "астра":
+        return BRAND_BY_NAME[normal_form(leading[0])] + query[leading.end():]
+    return query
+
+
+def suggest_families(connection, snapshot, query):
+    if catalog_identifier(query):
+        rows = connection.execute(SUGGEST_IDENTIFIER, {
+            "identifier": query.lower(), "snapshot": snapshot,
+        }).fetchall()
+        if rows:
+            return [unescape(row["name"]) for row in rows]
+    canonical = known_brand(query)
+    lookup = canonical or normalize_query(resolve_search_input(query))
     rows = connection.execute(SUGGEST_FAMILIES, {"query": lookup, "snapshot": snapshot}).fetchall()
     if not rows and len(lookup) >= 4:
         literal = lookup.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

@@ -2,7 +2,7 @@ import unittest
 
 from app.search import (
     as_card, compatibility, fill_recommendations, is_kaspersky_query, matches_product_variant, matching_version, merge_candidates,
-    one_edit_title, preferred_categories, resolve_suggestion_alias, select_families,
+    one_edit_title, preferred_categories, resolve_search_input, resolve_suggestion_alias, select_families,
 )
 
 
@@ -89,6 +89,16 @@ class TypoTests(unittest.TestCase):
         ):
             with self.subTest(query=query):
                 self.assertEqual(resolve_suggestion_alias(query), expected)
+
+    def test_registered_brand_forms_preserve_qualifiers_and_recognize_keyboard_layout(self):
+        for query, expected in (
+            ("rfcgthcrbq", "Kaspersky"), ("фтнвуыл", "AnyDesk"), ("Any Desk", "AnyDesk"),
+            ("майкр", "Microsoft"), ("майкрософт Visio 2024", "Microsoft Visio 2024"),
+            ("доктор веб CureNet", "Dr.Web CureNet"), ("Астра Линукс SE", "Astra Linux SE"),
+            ("Астра сервер", "Астра сервер"), ("zqjy939", "zqjy939"),
+        ):
+            with self.subTest(query=query):
+                self.assertEqual(resolve_search_input(query), expected)
 
 class FamilyOutputTests(unittest.TestCase):
     def test_priced_variant_preferred_and_exact_sku_preserved(self):
