@@ -15,6 +15,7 @@ const filterPanel = document.querySelector("#search-filters");
 const filterCount = document.querySelector("#active-filters");
 const demoMode = new URLSearchParams(location.search).get("demo") === "true";
 const selected = new Map();
+const comparisonLimit = 3;
 let activeSearch;
 let resultSet;
 let activeSuggestion;
@@ -114,7 +115,7 @@ function productCard(item, requestId, context) {
   button.dataset.offerId = item.offer_id;
   button.addEventListener("click", () => {
     if (selected.has(item.offer_id)) selected.delete(item.offer_id);
-    else if (selected.size < 2) selected.set(item.offer_id, item);
+    else if (selected.size < comparisonLimit) selected.set(item.offer_id, item);
     syncComparison();
   });
   renderCompareButton(button);
@@ -127,13 +128,13 @@ function renderCompareButton(button) {
   const isSelected = selected.has(button.dataset.offerId);
   button.setAttribute("aria-pressed", String(isSelected));
   button.textContent = isSelected ? "Убрать из сравнения" : "В сравнение";
-  button.disabled = selected.size === 2 && !isSelected;
+  button.disabled = selected.size >= comparisonLimit && !isSelected;
 }
 
 function syncComparison() {
   comparisonBar.hidden = selected.size === 0;
-  openComparison.disabled = selected.size !== 2;
-  document.querySelector("#comparison-count").textContent = "Выбрано " + selected.size + " из 2";
+  openComparison.disabled = selected.size < 2;
+  document.querySelector("#comparison-count").textContent = "Выбрано " + selected.size + " из " + comparisonLimit;
   comparisonItems.replaceChildren();
   for (const [id, item] of selected) {
     const entry = addText(comparisonItems, "div", "");
@@ -152,11 +153,12 @@ function syncComparison() {
 }
 
 openComparison.addEventListener("click", () => {
-  if (selected.size !== 2) return;
+  if (selected.size < 2) return;
   const items = Array.from(selected.values());
   const content = document.querySelector("#comparison-content");
   content.replaceChildren();
   const table = document.createElement("table");
+  table.dataset.items = items.length;
   addText(table.createTHead().insertRow(), "th", "Условие");
   for (const item of items) {
     const header = addText(table.tHead.rows[0], "th", item.name);
@@ -177,7 +179,7 @@ openComparison.addEventListener("click", () => {
   for (const [label, displayValue] of metrics) {
     const row = body.insertRow();
     const values = items.map(displayValue);
-    if (values[0] && values[1] && values[0] !== values[1]) row.className = "difference";
+    if (new Set(values.filter(value => value !== null)).size > 1) row.className = "difference";
     addText(row, "th", label).scope = "row";
     for (const value of values) addText(row, "td", value ?? "Нет данных в каталоге");
   }

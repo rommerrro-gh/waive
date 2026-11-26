@@ -289,7 +289,13 @@
 }
 .catalog .product-footer a:hover { background: var(--brand-hover); }
 .catalog .product-footer button { min-height: 2.5rem; font-size: .85rem; }
-.catalog .compare-toggle:not([aria-pressed="true"]) { border-color: transparent; }
+.catalog button.compare-toggle[aria-pressed="false"] {
+  background: #efeff1;
+  border-color: #e2e2e7;
+}
+.catalog button.compare-toggle[aria-pressed="false"]:hover:not(:disabled) {
+  background: #e5e5e9;
+}
 .catalog .procurement-actions { border-left: 1px solid var(--edge); padding-left: .55rem; }
 
 .catalog :is(.approval, .comparison-bar) { border-color: var(--edge); background: var(--white); }
@@ -300,6 +306,8 @@
 .catalog :is(#alternatives, #recommendations) { margin-block: 1.7rem; }
 .catalog .comparison-content tr.difference { background: var(--wash); }
 .catalog dialog { border-color: var(--edge); }
+.catalog #comparison:has([data-items="3"]) { width: min(65rem, calc(100% - 2rem)); }
+.catalog .comparison-content table[data-items="3"] { min-width: 44rem; }
 .catalog dialog::backdrop { background: #211c206b; }
 .catalog .site-footer {
   padding-block: .9rem 1.5rem;
