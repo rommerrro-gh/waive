@@ -1,0 +1,31 @@
+name: Проверка каталога
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      POSTGRES_PASSWORD: waive-ci
+      DATABASE_URL: postgresql://waive:waive-ci@db:5432/waive
+    steps:
+      - uses: actions/checkout@v4
+      - name: Проверить форматирование JavaScript и поисковую логику
+        run: |
+          node --check app/static/search.js
+          python3 -m unittest discover -s tests
+      - name: Загрузить реальный каталог
+        run: |
+          docker compose up -d --wait db
+          docker compose run --rm api alembic upgrade head
+          docker compose run --rm api python -m app.import_catalog /catalog/Mindbox.xml.gz
+          docker compose run --rm api python -m app.import_catalog /catalog/Mindbox.xml.gz
+          docker compose up -d api
+      - name: Проверить API и данные
+        run: |
+          curl --fail --retry 20 --retry-all-errors --retry-delay 1 http://127.0.0.1:8000/ready
+          docker compose exec -T api python - < tests/catalog_smoke.py
+      - name: Диагностика
+        if: failure()
+        run: docker compose logs
