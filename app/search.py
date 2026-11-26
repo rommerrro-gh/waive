@@ -1,7 +1,7 @@
 import re
 from html import unescape
 
-from app.procurement import filter_offers, purchase_values
+from app.procurement import CATALOG_FILTERS, catalog_match, filter_offers, purchase_values
 
 NORMALIZATIONS = (
     (re.compile(r"\bкрипто[ -]+про\b", re.IGNORECASE), "КриптоПро"),
@@ -383,7 +383,7 @@ def compatibility(anchor, offer, query, category, platform=None):
     }
 
 
-def fill_recommendations(connection, snapshot, query, results, platform=None):
+def fill_recommendations(connection, snapshot, query, results, platform=None, catalog_filters=None):
     if not results or len(results) >= 4:
         return []
     anchor = results[0]
@@ -397,6 +397,8 @@ def fill_recommendations(connection, snapshot, query, results, platform=None):
     })
     recommendations = []
     for row in rows:
+        if any(not catalog_match(row, key, value) for key, value in (catalog_filters or {}).items()):
+            continue
         card = as_card(row, reason)
         if card["family_id"] in taken:
             continue
@@ -461,7 +463,10 @@ def assemble_results(connection, snapshot, query, lexical, semantic, filters=Non
         card["bundle_available"] = (
             card["category_id"] in RECOMMENDATIONS and bool(platform_values(card))
         )
-    recommendations = fill_recommendations(connection, snapshot, query, results, (filters or {}).get("platform"))
+    catalog_filters = {key: filters[key] for key in CATALOG_FILTERS if filters and key in filters}
+    recommendations = fill_recommendations(
+        connection, snapshot, query, results, (filters or {}).get("platform"), catalog_filters,
+    )
     return results, [], recommendations
 
 

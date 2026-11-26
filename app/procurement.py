@@ -3,6 +3,7 @@ import re
 PLATFORMS = ("windows", "windows-server", "linux", "astra-linux", "macos")
 LICENSE_TYPES = ("new", "subscription", "renewal", "upgrade")
 LABELS = {"platform": "Платформа", "term": "Срок лицензии", "license_type": "Тип лицензии"}
+CATALOG_FILTERS = ("in_stock", "price_min", "price_max")
 
 PLATFORM_PATTERNS = {
     "windows-server": r"\bwindows\s+server\b",
@@ -73,18 +74,31 @@ def purchase_values(attributes):
     return {"platform": platforms, "term": {term} if term else set(), "license_type": types}
 
 
+def catalog_match(item, key, value):
+    if key == "in_stock":
+        return item["available"]
+    price = item["price"]
+    if price is None or price <= 0 or (item["currency"] or "RUB") not in {"RUB", "RUR"}:
+        return None
+    return price >= value if key == "price_min" else price <= value
+
+
 def filter_offers(offers, filters, family_key, attributes_for):
     families_before = {family_key(item) for item in offers}
     outcome = {key: {"would_restore": set(), "unverified": set()} for key in filters}
     passed = []
+    purchase = {key: value for key, value in filters.items() if key in LABELS}
+    catalog = {key: value for key, value in filters.items() if key in CATALOG_FILTERS}
     for item in offers:
-        values = purchase_values(attributes_for(item))
-        failures = [key for key, value in filters.items() if value not in values[key]]
+        values = purchase_values(attributes_for(item)) if purchase else {}
+        checks = {key: value in values[key] if values[key] else None for key, value in purchase.items()}
+        checks.update((key, catalog_match(item, key, value)) for key, value in catalog.items())
+        failures = [key for key, matches in checks.items() if not matches]
         if not failures:
             passed.append(item)
         elif len(failures) == 1:
             key = failures[0]
-            bucket = "would_restore" if values[key] else "unverified"
+            bucket = "unverified" if checks[key] is None else "would_restore"
             outcome[key][bucket].add(family_key(item))
     families_after = {family_key(item) for item in passed}
     diagnostics = {}

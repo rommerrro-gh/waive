@@ -11,8 +11,16 @@ async function main() {
   try {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     page.on("pageerror", error => { throw error; });
-    await page.goto("http://127.0.0.1:8000/");
+    await page.goto(new URL("/?demo=true", process.env.WAIVE_TEST_URL || "http://127.0.0.1:8000").href);
     const input = page.getByRole("combobox", {name: "Название, бренд или артикул"});
+    const filters = page.locator("#search-filters > summary");
+    const stock = page.getByRole("checkbox", {name: "В наличии"});
+    assert.equal(await stock.isVisible(), false);
+    await filters.click();
+    assert.equal(await stock.isVisible(), true);
+    assert.equal(await page.getByRole("spinbutton", {name: "Цена от, ₽"}).isVisible(), true);
+    await filters.click();
+    assert.equal(await stock.isVisible(), false);
     await input.fill("крипто пр");
     await page.getByRole("option", { name: /КриптоПро CSP TLS/i }).waitFor();
     assert.equal(await input.getAttribute("aria-expanded"), "true");
@@ -31,6 +39,7 @@ async function main() {
     await input.fill("антивирус для рабочих станций компании");
     await page.getByRole("button", { name: "Найти" }).click();
     await page.locator("#results article").nth(2).waitFor();
+    assert.equal(await page.getByRole("button", {name: "На согласование"}).count(), 0);
     const buttons = page.locator("#results .compare-toggle");
     await buttons.nth(0).click();
     assert.equal(await page.locator("#open-comparison").isDisabled(), true);
@@ -52,11 +61,14 @@ async function main() {
     await page.locator("#comparison-items button").first().click();
     assert.equal(await page.locator("#open-comparison").isDisabled(), true);
     await input.fill("антивирус для рабочих станций на год");
-    await page.locator("input[name=demo]").check();
     await page.getByRole("button", { name: "Найти" }).click();
     await page.getByRole("button", { name: "Применить: 12 месяцев" }).click();
     await page.locator("#results article").first().waitFor();
     assert.equal(await page.locator("select[name=term]").inputValue(), "12");
+    await page.getByRole("link", {name: "Закупки для бизнеса", exact: true}).click();
+    await page.waitForURL("**/business?demo=true");
+    assert.equal(await input.inputValue(), "антивирус для рабочих станций на год");
+    await filters.click();
     await page.locator("select[name=platform]").selectOption("windows");
     await page.getByRole("spinbutton", {name: "Рабочих мест"}).fill("50");
     await page.getByRole("button", {name: "Сохранить профиль закупки"}).click();
@@ -64,7 +76,6 @@ async function main() {
     assert.equal(await page.locator("select[name=platform]").inputValue(), "windows");
     assert.equal(await page.getByRole("spinbutton", {name: "Рабочих мест"}).inputValue(), "50");
     await input.fill("антивирус для рабочих станций");
-    await page.locator("input[name=demo]").check();
     await page.getByRole("button", {name: "Найти"}).click();
     const first = page.locator("#results article").first();
     await first.getByRole("button", {name: "На согласование"}).click();
@@ -80,6 +91,7 @@ async function main() {
       assert.equal(result.suggestedFilename(), expected);
       assert.match(await readFile(await result.path(), "utf8"), content);
     }
+    await filters.click();
     await page.locator("select[name=platform]").selectOption("linux");
     await input.fill("офисный пакет");
     assert.equal(await page.locator("select[name=platform]").inputValue(), "windows");
@@ -87,6 +99,7 @@ async function main() {
     await page.getByText("Список на согласование · 1").waitFor();
     assert.ok(process.env.BUNDLE_SMOKE_OFFER);
     await page.getByRole("button", {name: "Удалить профиль"}).click();
+    await filters.click();
     await page.locator("select[name=platform]").selectOption("");
     await page.locator("select[name=term]").selectOption("");
     await input.fill(process.env.BUNDLE_SMOKE_OFFER);
@@ -96,6 +109,9 @@ async function main() {
     await bundle.getByText(/проверена совместимость по платформе/).waitFor();
     await bundle.locator("article").nth(1).getByRole("button", {name: "На согласование"}).click();
     await page.getByText("Список на согласование · 2").waitFor();
+    await page.getByRole("link", {name: "К поиску по каталогу", exact: true}).click();
+    assert.equal(await page.getByText("Список на согласование · 2").isVisible(), false);
+    assert.equal(await input.inputValue(), process.env.BUNDLE_SMOKE_OFFER);
     await page.getByRole("link", { name: "Аналитика поиска" }).click();
     await page.getByLabel("Ключ аналитики").fill(process.env.ANALYTICS_TOKEN);
     await page.getByLabel("Только демо-запросы").check();

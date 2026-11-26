@@ -7,6 +7,9 @@ const comparisonBar = document.querySelector("#comparison-bar");
 const comparisonItems = document.querySelector("#comparison-items");
 const openComparison = document.querySelector("#open-comparison");
 const comparison = document.querySelector("#comparison");
+const filterPanel = document.querySelector("#search-filters");
+const filterCount = document.querySelector("#active-filters");
+const demoMode = new URLSearchParams(location.search).get("demo") === "true";
 const selected = new Map();
 let activeSearch;
 let activeSuggestion;
@@ -40,9 +43,9 @@ function attributeValue(item, ...keys) {
   return null;
 }
 
-function addProductLink(parent, item, requestId) {
+function addProductLink(parent, item, requestId, label = "Карточка на Softline") {
   if (/^https?:\/\//i.test(item.url || "")) {
-    const link = addText(parent, "a", "Карточка на Softline");
+    const link = addText(parent, "a", label);
     link.href = item.url;
     if (requestId) {
       link.addEventListener("click", () => {
@@ -62,18 +65,44 @@ function renderSection(id, cards, requestId, context) {
   section.querySelector(".cards").replaceChildren(...cards.map(item => productCard(item, requestId, context)));
 }
 
+function productIcon(item) {
+  if (item.category_id !== "650") return "box-seam";
+  if (/cloud|облачн/i.test(item.name)) return "cloud-check";
+  if (/desktop|workstation|рабочих станций/i.test(item.name)) return "display";
+  return "shield-check";
+}
+
 function productCard(item, requestId, context) {
   const card = document.createElement("article");
-  addText(card, "h2", item.name);
-  addText(card, "p", priceLabel(item) + " · " + availabilityLabel(item));
-  addText(card, "p", item.reason);
+  card.className = "product-card";
+  const body = addText(card, "div", "");
+  body.className = "product-body";
+  const icon = document.createElement("img");
+  const symbol = productIcon(item);
+  icon.src = "/icons/" + symbol + ".svg";
+  icon.alt = "";
+  icon.width = icon.height = 22;
+  const tile = addText(body, "span", "");
+  tile.className = "product-icon " + symbol;
+  tile.append(icon);
+  const copy = addText(body, "div", "");
+  addText(copy, "h2", item.name);
+  if (item.reason) addText(copy, "p", item.reason).className = "product-reason";
+  const facts = addText(copy, "ul", "");
+  facts.className = "product-facts";
   for (const key of ["Версия", "Срок действия", "Модель лицензирования", "Тип лицензии", "Платформа", "Минимальная покупка"]) {
     const value = attributeValue(item, key);
-    if (value) addText(card, "p", key + ": " + value);
+    if (value) addText(facts, "li", key + " · " + value);
   }
-  const actions = addText(card, "div", "");
+  facts.hidden = !facts.children.length;
+  const availability = addText(card, "p", availabilityLabel(item));
+  availability.className = "product-availability";
+  availability.dataset.available = String(item.available);
+  const footer = addText(card, "div", "");
+  footer.className = "product-footer";
+  addText(footer, "strong", priceLabel(item));
+  const actions = addText(footer, "div", "");
   actions.className = "card-actions";
-  addProductLink(actions, item, requestId);
   const button = addText(actions, "button", "");
   button.type = "button";
   button.className = "secondary compare-toggle";
@@ -84,7 +113,8 @@ function productCard(item, requestId, context) {
     syncComparison();
   });
   renderCompareButton(button);
-  if (context) addProcurementActions(card, actions, item, context);
+  addProductLink(actions, item, requestId, "В каталог");
+  if (context) addProcurementActions(actions, item, context);
   return card;
 }
 
@@ -151,6 +181,7 @@ openComparison.addEventListener("click", () => {
 });
 
 const filterNames = {platform: "платформа", term: "срок лицензии", license_type: "тип лицензии"};
+const catalogFilterNames = {...filterNames, in_stock: "в наличии", price_min: "цена от", price_max: "цена до"};
 const filterSuggestions = document.querySelector("#filter-suggestions");
 const filterDetails = document.querySelector("#filter-details");
 
@@ -179,9 +210,12 @@ function showFilters(data) {
     .filter(([, counts]) => counts.would_restore > 0);
   for (const [key, counts] of entries) {
     const note = counts.unverified ? " · без подтверждения: " + counts.unverified : "";
-    addText(filterDetails, "p", filterNames[key] + " исключает семейств: " + counts.would_restore + note);
-    filterButton(filterDetails, "Снять условие «" + filterNames[key] + "»", () => {
-      form.elements[key].value = "";
+    addText(filterDetails, "p", catalogFilterNames[key] + " исключает семейств: " + counts.would_restore + note);
+    filterButton(filterDetails, "Снять условие «" + catalogFilterNames[key] + "»", () => {
+      const field = form.elements[key];
+      if (field.type === "checkbox") field.checked = false;
+      else field.value = "";
+      validatePrice();
       form.requestSubmit();
     });
   }
@@ -259,6 +293,17 @@ query.addEventListener("keydown", event => {
   }
 });
 
+function validatePrice() {
+  const {price_min: min, price_max: max} = form.elements;
+  max.setCustomValidity(min.value && max.value && min.valueAsNumber > max.valueAsNumber ?
+    "Цена «От» должна быть не выше цены «До»" : "");
+}
+
+form.addEventListener("input", validatePrice);
+form.addEventListener("invalid", event => {
+  if (filterPanel.contains(event.target)) filterPanel.open = true;
+}, true);
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   closeSuggestions();
@@ -275,25 +320,28 @@ form.addEventListener("submit", async (event) => {
   renderSection("recommendations", []);
   status.textContent = "Ищем товары…";
   const params = new URLSearchParams(new FormData(form));
-  for (const key of Object.keys(filterNames)) if (!params.get(key)) params.delete(key);
+  for (const key of Object.keys(catalogFilterNames)) if (!params.get(key)) params.delete(key);
   params.set("track", "true");
-  if (profile) params.set("with_profile", "true");
+  if (demoMode) params.set("demo", "true");
+  if (isBusinessView() && profile) params.set("with_profile", "true");
+  if (isBusinessView()) updateProfileControls();
   lastProcurementQuery = query.value.trim();
-  const count = workplaces.value;
-  if (document.querySelector("#lexical").checked) params.set("semantic", "false");
   try {
     const response = await fetch("/search?" + params, { signal: controller.signal });
     if (!response.ok) throw new Error("Поиск недоступен");
     const data = await response.json();
     if (controller.signal.aborted) return;
     const requestId = data.tracked ? data.request_id : undefined;
-    const context = {version: data.catalog_version, platform: params.get("platform"), count};
+    const context = {version: data.catalog_version, platform: params.get("platform")};
     results.replaceChildren(...data.results.map(item => productCard(item, requestId, context)));
     renderSection("alternatives", data.alternatives, undefined, context);
     renderSection("recommendations", data.recommendations, requestId, context);
+    const active = Object.keys(data.applied_filters);
+    const activeCount = active.length - Number(active.includes("price_min") && active.includes("price_max"));
+    filterCount.textContent = activeCount ? " · " + activeCount : "";
+    filterCount.hidden = !activeCount;
     showFilters(data);
-    status.textContent = data.clarification || (data.search_mode === "hybrid" ?
-      "Результаты поиска по тексту и смыслу" : "Результаты текстового поиска");
+    status.textContent = data.clarification || "Результаты поиска";
   } catch (error) {
     if (error.name !== "AbortError") status.textContent = "Поиск временно недоступен. Попробуйте ещё раз.";
   }

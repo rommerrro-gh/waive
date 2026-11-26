@@ -49,6 +49,21 @@ assert len({item["family_id"] for item in office["top4"]}) == len(office["top4"]
 assert all(item["compatibility"]["matched_platforms"] for item in office["recommendations"]), office
 print("Полный каталог, разные семейства и допродажи с совпадением платформы проверены")
 
+priced = next(card for card in office["top4"] if card["available"] and card["price"])
+amount = float(priced["price"])
+lower, upper = int(amount), int(amount) + 1
+filtered = get("/search?" + urlencode({
+    "q": priced["offer_id"], "semantic": "false", "in_stock": "true", "price_min": lower, "price_max": upper,
+}))
+assert filtered["results"][0]["offer_id"] == priced["offer_id"], filtered
+assert all(item["available"] and lower <= float(item["price"]) <= upper for item in filtered["top4"])
+try:
+    get("/search?q=Office&price_min=200&price_max=100")
+except HTTPError as error:
+    assert error.code == 422
+else:
+    raise AssertionError("Перевёрнутый диапазон цены принят")
+
 
 from app.procurement import purchase_values
 

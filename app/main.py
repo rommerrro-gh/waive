@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from psycopg import OperationalError
 from psycopg.errors import QueryCanceled
@@ -105,6 +106,9 @@ def find_products(
     platform: Literal[*PLATFORMS] | None = None,
     term: Annotated[str | None, Query(pattern=r"^(?:[1-9][0-9]?|1[01][0-9]|120|perpetual)$")] = None,
     license_type: Literal[*LICENSE_TYPES] | None = None,
+    in_stock: bool = False,
+    price_min: Annotated[int | None, Query(ge=0, le=999_999_999)] = None,
+    price_max: Annotated[int | None, Query(ge=0, le=999_999_999)] = None,
     track: bool = False,
     demo: bool = False,
     with_profile: bool = False,
@@ -112,8 +116,11 @@ def find_products(
     query = " ".join(q.split())
     if not query:
         raise HTTPException(422, "Введите поисковый запрос")
+    if price_min is not None and price_max is not None and price_min > price_max:
+        raise HTTPException(422, "Цена «От» должна быть не выше цены «До»")
     filters = {key: value for key, value in {
         "platform": platform, "term": term, "license_type": license_type,
+        "in_stock": in_stock or None, "price_min": price_min, "price_max": price_max,
     }.items() if value is not None}
     diagnostics = {}
     request_id = uuid4()
@@ -190,4 +197,12 @@ def company_bundle(
         raise HTTPException(503, "Подбор комплекта временно недоступен") from error
 
 
-app.mount("/", StaticFiles(directory=Path(__file__).with_name("static"), html=True), name="ui")
+static_folder = Path(__file__).with_name("static")
+
+
+@app.get("/business", include_in_schema=False)
+def business_page():
+    return FileResponse(static_folder / "index.html")
+
+
+app.mount("/", StaticFiles(directory=static_folder, html=True), name="ui")

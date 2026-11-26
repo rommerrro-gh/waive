@@ -5,58 +5,86 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Waive | Поиск по каталогу</title>
   <link rel="stylesheet" href="/style.css">
-  <script src="/search.js" defer></script>
-  <script src="/procurement.js" defer></script>
+  <link rel="stylesheet" href="/catalog.css?v=2">
+  <script src="/search.js?v=2" defer></script>
+  <script src="/procurement.js?v=2" defer></script>
 </head>
-<body>
-  <main>
-    <nav><a href="/analytics.html">Аналитика поиска</a></nav>
-    <h1>Поиск по каталогу Softline</h1>
+<body class="catalog" data-view="search">
+  <header class="site-header catalog-shell">
+    <a class="wordmark" href="/" aria-label="Waive, поиск по каталогу">Waive</a>
+    <a class="outline-link" id="back-to-search" href="/" hidden>К поиску по каталогу</a>
+  </header>
+  <main class="catalog-shell">
+    <h1 id="page-title">Поиск по каталогу Softline</h1>
     <form id="search" role="search">
-      <label for="query">Название, бренд или артикул</label>
-      <div class="field">
-        <div class="query-field">
-          <input id="query" name="q" type="search" required maxlength="200"
-                 placeholder="КриптоПро CSP 5.0" autocomplete="off" role="combobox"
-                 aria-autocomplete="list" aria-controls="suggestions" aria-expanded="false">
-          <ul id="suggestions" role="listbox" aria-label="Подсказки поиска" hidden></ul>
+      <div class="search-box">
+        <label class="visually-hidden" for="query">Название, бренд или артикул</label>
+        <div class="field">
+          <div class="query-field">
+            <input id="query" name="q" type="search" required maxlength="200"
+                   placeholder="Название, бренд или артикул" autocomplete="off" role="combobox"
+                   aria-autocomplete="list" aria-controls="suggestions" aria-expanded="false">
+            <ul id="suggestions" role="listbox" aria-label="Подсказки поиска" hidden></ul>
+          </div>
+          <button type="submit">Найти</button>
         </div>
-        <button type="submit">Найти</button>
       </div>
-      <label><input id="lexical" type="checkbox"> Только текстовый поиск</label>
-      <fieldset class="purchase-filters">
-        <legend>Условия закупки</legend>
-        <label>Платформа
-          <select name="platform">
-            <option value="">Любая</option>
-            <option value="windows">Windows</option>
-            <option value="windows-server">Windows Server</option>
-            <option value="linux">Linux</option>
-            <option value="astra-linux">Astra Linux</option>
-            <option value="macos">macOS</option>
-          </select>
-        </label>
-        <label>Срок лицензии
-          <select name="term">
-            <option value="">Любой</option>
-            <option value="1">1 месяц</option>
-            <option value="3">3 месяца</option>
-            <option value="6">6 месяцев</option>
-            <option value="12">12 месяцев</option>
-            <option value="24">24 месяца</option>
-            <option value="36">36 месяцев</option>
-            <option value="perpetual">Бессрочная</option>
-          </select>
-        </label>
-        <label>Тип лицензии
-          <select name="license_type">
-            <option value="">Любой</option>
-            <option value="new">Новая лицензия</option>
-            <option value="subscription">Подписка</option>
-            <option value="renewal">Продление</option>
-            <option value="upgrade">Обновление</option>
-          </select>
-        </label>
+      <div class="catalog-controls">
+        <details id="search-filters">
+          <summary>Фильтры <span id="active-filters" hidden></span></summary>
+          <div class="filter-panel">
+            <fieldset class="purchase-filters">
+              <legend>Условия поиска</legend>
+              <label>Платформа
+                <select name="platform">
+                  <option value="">Любая</option>
+                  <option value="windows">Windows</option>
+                  <option value="windows-server">Windows Server</option>
+                  <option value="linux">Linux</option>
+                  <option value="astra-linux">Astra Linux</option>
+                  <option value="macos">macOS</option>
+                </select>
+              </label>
+              <label>Срок лицензии
+                <select name="term">
+                  <option value="">Любой</option>
+                  <option value="1">1 месяц</option>
+                  <option value="3">3 месяца</option>
+                  <option value="6">6 месяцев</option>
+                  <option value="12">12 месяцев</option>
+                  <option value="24">24 месяца</option>
+                  <option value="36">36 месяцев</option>
+                  <option value="perpetual">Бессрочная</option>
+                </select>
+              </label>
+              <label>Тип лицензии
+                <select name="license_type">
+                  <option value="">Любой</option>
+                  <option value="new">Новая лицензия</option>
+                  <option value="subscription">Подписка</option>
+                  <option value="renewal">Продление</option>
+                  <option value="upgrade">Обновление</option>
+                </select>
+              </label>
+            </fieldset>
+            <div class="catalog-facets">
+              <label class="stock-filter"><input type="checkbox" name="in_stock" value="true"> В наличии</label>
+              <fieldset class="price-filter">
+                <legend>Цена, ₽</legend>
+                <label><span class="visually-hidden">Цена от, ₽</span><input type="number" name="price_min" min="0" max="999999999" step="1" inputmode="numeric" placeholder="От"></label>
+                <label><span class="visually-hidden">Цена до, ₽</span><input type="number" name="price_max" min="0" max="999999999" step="1" inputmode="numeric" placeholder="До"></label>
+              </fieldset>
+              <button class="secondary apply-filters" type="submit">Применить</button>
+            </div>
+          </div>
+        </details>
+        <a class="outline-link" id="business-link" href="/business">Закупки для бизнеса</a>
+      </div>
+      <div id="filter-suggestions" class="card-actions" aria-label="Предложенные фильтры" hidden></div>
+    </form>
+    <section id="business-profile" class="business-profile" hidden aria-labelledby="profile-title">
+      <h2 id="profile-title">Профиль закупки</h2>
+      <p id="profile-criteria"></p>
         <label>Рабочих мест
           <input id="workplaces" type="number" min="1" max="1000000" step="1" placeholder="Например, 50">
         </label>
@@ -66,40 +94,44 @@
           <button id="delete-profile" class="secondary" type="button" hidden>Удалить профиль</button>
           <span id="profile-status" role="status"></span>
         </div>
-      </fieldset>
-      <label class="demo-mode"><input name="demo" type="checkbox" value="true"> Записывать как демо</label>
-      <div id="filter-suggestions" class="card-actions" aria-label="Предложенные фильтры" hidden></div>
-    </form>
-    <section id="comparison-bar" class="comparison-bar" aria-label="Выбранные предложения" hidden>
-      <p id="comparison-count" role="status"></p>
-      <div id="comparison-items"></div>
-      <button id="open-comparison" type="button" disabled>Сравнить предложения</button>
     </section>
-    <details id="approval" class="approval">
-      <summary id="approval-count">Список на согласование · 0</summary>
-      <p id="approval-empty">Добавьте предложения из поиска или комплекта.</p>
-      <ul id="approval-items"></ul>
-      <div class="card-actions">
-        <button id="export-approval" type="button" class="secondary" disabled>Скачать CSV</button>
-        <button id="quote-preview" type="button" disabled>Черновик запроса КП</button>
+    <div class="catalog-layout">
+      <div class="catalog-results">
+        <section id="comparison-bar" class="comparison-bar" aria-label="Выбранные предложения" hidden>
+          <p id="comparison-count" role="status"></p>
+          <div id="comparison-items"></div>
+          <button id="open-comparison" type="button" disabled>Сравнить предложения</button>
+        </section>
+        <p id="status" role="status"></p>
+        <div id="filter-details" class="card-actions" hidden></div>
+        <section id="results" class="cards" aria-label="Результаты поиска"></section>
+        <section id="alternatives" hidden><h2>Альтернативы</h2><div class="cards"></div></section>
+        <section id="bundle" class="approval" hidden aria-labelledby="bundle-title">
+          <h2 id="bundle-title">Комплект для компании</h2>
+          <p id="bundle-message" role="status"></p>
+          <div class="cards"></div>
+        </section>
+        <section id="recommendations" hidden><h2>Допродажи с проверкой характеристик</h2><div class="cards"></div></section>
       </div>
-      <section id="quote" hidden>
-        <label for="quote-text">Текст запроса коммерческого предложения</label>
-        <textarea id="quote-text" rows="12"></textarea>
-        <button id="quote-download" type="button" class="secondary">Скачать черновик TXT</button>
-      </section>
-    </details>
-    <p id="status" role="status"></p>
-    <div id="filter-details" class="card-actions" hidden></div>
-    <section id="results" class="cards" aria-label="Результаты поиска"></section>
-    <section id="alternatives" hidden><h2>Альтернативы</h2><div class="cards"></div></section>
-    <section id="bundle" class="approval" hidden aria-labelledby="bundle-title">
-      <h2 id="bundle-title">Комплект для компании</h2>
-      <p id="bundle-message" role="status"></p>
-      <div class="cards"></div>
-    </section>
-    <section id="recommendations" hidden><h2>Допродажи с проверкой характеристик</h2><div class="cards"></div></section>
+      <aside id="business-approval" hidden aria-label="Закупки">
+        <details id="approval" class="approval" open>
+          <summary id="approval-count">Список на согласование · 0</summary>
+          <p id="approval-empty">Добавьте предложения из поиска или комплекта.</p>
+          <ul id="approval-items"></ul>
+          <div class="card-actions">
+            <button id="quote-preview" type="button" disabled>Черновик запроса КП</button>
+            <button id="export-approval" type="button" class="secondary" disabled>Скачать CSV</button>
+          </div>
+          <section id="quote" hidden>
+            <label for="quote-text">Текст запроса коммерческого предложения</label>
+            <textarea id="quote-text" rows="12"></textarea>
+            <button id="quote-download" type="button" class="secondary">Скачать черновик TXT</button>
+          </section>
+        </details>
+      </aside>
+    </div>
   </main>
+  <footer class="catalog-shell site-footer"><a href="/analytics.html">Аналитика поиска</a></footer>
   <dialog id="comparison" aria-labelledby="comparison-title">
     <div class="dialog-header">
       <h2 id="comparison-title">Сравнение предложений</h2>

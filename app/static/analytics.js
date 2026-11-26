@@ -6,7 +6,8 @@ const misses = document.querySelector("#misses");
 const empty = document.querySelector("#analytics-empty");
 let pending;
 
-const conditions = {platform: "платформа", term: "срок лицензии", license_type: "тип лицензии"};
+const conditions = {platform: "платформа", term: "срок лицензии", license_type: "тип лицензии",
+  in_stock: "в наличии", price_min: "цена от", price_max: "цена до"};
 const labels = {windows: "Windows", "windows-server": "Windows Server", linux: "Linux",
   "astra-linux": "Astra Linux", macos: "macOS", new: "новая лицензия", subscription: "подписка",
   renewal: "продление", upgrade: "обновление", perpetual: "бессрочная"};
@@ -20,9 +21,9 @@ function addText(parent, tag, value) {
 function explain(reason) {
   const [code, key] = reason.split(".");
   if (code === "unverified") return ["Не подтверждено условие «" + conditions[key] + "»",
-    "Проверить и заполнить характеристику лицензии"];
+    "Проверить данные о предложении в каталоге"];
   if (code === "filter") return ["Сузило выдачу условие «" + conditions[key] + "»",
-    "Проверить, нужны ли лицензии с этим условием"];
+    "Проверить ассортимент по этому условию"];
   return {
     no_candidates: ["Поиск не нашёл кандидатов", "Проверить названия и ассортимент"],
     combined_filters: ["Сузило выдачу сочетание условий", "Проверить доступные сочетания условий"],
@@ -33,6 +34,14 @@ function explain(reason) {
 
 function percentage(count, total) {
   return total ? new Intl.NumberFormat("ru-RU", {style: "percent", maximumFractionDigits: 1}).format(count / total) : "—";
+}
+
+function filterDescription([key, value]) {
+  if (key === "in_stock") return conditions[key];
+  if (key === "price_min" || key === "price_max") {
+    return conditions[key] + " " + new Intl.NumberFormat("ru-RU").format(value) + " ₽";
+  }
+  return conditions[key] + " — " + (labels[value] || value + " мес.");
 }
 
 form.addEventListener("submit", async event => {
@@ -71,8 +80,7 @@ form.addEventListener("submit", async event => {
     misses.replaceChildren();
     for (const group of data.groups) {
       const row = misses.insertRow();
-      const filters = Object.entries(group.filters).map(([key, value]) =>
-        conditions[key] + " — " + (labels[value] || value + " мес."));
+      const filters = Object.entries(group.filters).map(filterDescription);
       addText(row, "td", [group.query, ...filters].join(" · "));
       addText(row, "td", group.searches);
       for (const text of explain(group.reason)) addText(row, "td", text);

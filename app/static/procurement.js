@@ -12,6 +12,12 @@ const quote = document.querySelector("#quote");
 const quoteText = document.querySelector("#quote-text");
 const bundle = document.querySelector("#bundle");
 const bundleMessage = document.querySelector("#bundle-message");
+const pageTitle = document.querySelector("#page-title");
+const businessLink = document.querySelector("#business-link");
+const backToSearch = document.querySelector("#back-to-search");
+const businessProfile = document.querySelector("#business-profile");
+const businessApproval = document.querySelector("#business-approval");
+const profileCriteria = document.querySelector("#profile-criteria");
 let profile = readLocal(profileKey, null);
 let lastProcurementQuery;
 let bundleRequest;
@@ -49,11 +55,17 @@ function applyProfile() {
 function updateProfileControls(message = "") {
   restoreProfile.hidden = deleteProfile.hidden = !profile;
   profileStatus.textContent = message || (profile ? "Профиль активен. Изменения фильтров действуют для текущего поиска." : "");
+  const criteria = Object.keys(filterNames).map(key => {
+    const field = form.elements[key];
+    return field.value ? field.selectedOptions[0].textContent : "";
+  }).filter(Boolean);
+  profileCriteria.textContent = criteria.join(" · ");
 }
 
 function restoreForNewQuery() {
-  if (profile && lastProcurementQuery != null && query.value.trim() !== lastProcurementQuery) {
+  if (isBusinessView() && profile && lastProcurementQuery != null && query.value.trim() !== lastProcurementQuery) {
     applyProfile();
+    updateProfileControls();
     lastProcurementQuery = undefined;
   }
 }
@@ -64,13 +76,48 @@ document.querySelector("#save-profile").addEventListener("click", () => {
   profile = {...fields, count: workplaces.value};
   updateProfileControls(saveLocal(profileKey, profile) ? "Профиль сохранён в этом браузере." : "Профиль доступен до закрытия страницы.");
 });
-restoreProfile.addEventListener("click", applyProfile);
+restoreProfile.addEventListener("click", () => {
+  applyProfile();
+  updateProfileControls();
+});
 deleteProfile.addEventListener("click", () => {
   profile = null;
   updateProfileControls(saveLocal(profileKey, null) ? "Профиль удалён." : "Не удалось удалить сохранённый профиль из браузера.");
 });
-if (profile) applyProfile();
-updateProfileControls();
+for (const key of Object.keys(filterNames)) {
+  form.elements[key].addEventListener("change", () => updateProfileControls());
+}
+
+function isBusinessView() {
+  return location.pathname === "/business";
+}
+
+function updateView({focus = false, initial = false} = {}) {
+  const business = isBusinessView();
+  document.body.dataset.view = business ? "business" : "search";
+  pageTitle.textContent = business ? "Закупки для бизнеса" : "Поиск по каталогу Softline";
+  document.title = "Waive | " + pageTitle.textContent;
+  businessProfile.hidden = businessApproval.hidden = backToSearch.hidden = !business;
+  businessLink.hidden = business;
+  if (business && profile && (initial || !query.value.trim())) applyProfile();
+  if (!business) clearBundle();
+  updateProfileControls();
+  if (focus) {
+    pageTitle.tabIndex = -1;
+    pageTitle.focus();
+  }
+}
+
+for (const link of [businessLink, backToSearch]) {
+  link.search = location.search;
+  link.addEventListener("click", event => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    history.pushState(null, "", link.href);
+    updateView({focus: true});
+  });
+}
+window.addEventListener("popstate", () => updateView());
 
 function requirements(entry) {
   const checks = [];
@@ -123,17 +170,20 @@ function updateApprovalButton(button) {
   button.setAttribute("aria-pressed", String(included));
 }
 
-function addProcurementActions(card, actions, item, context) {
-  const {count, anchor} = context;
-  if (count) addText(card, "p", "Уточнить лицензию для " + count + " рабочих мест.");
-  const button = addText(actions, "button", "");
+function addProcurementActions(actions, item, context) {
+  const group = addText(actions, "div", "");
+  group.className = "card-actions procurement-actions";
+  const button = addText(group, "button", "");
   button.type = "button";
   button.className = "secondary";
   button.dataset.approvalId = item.offer_id;
-  button.addEventListener("click", () => toggleApproval({item, count, anchor}));
+  button.addEventListener("click", () => {
+    if (!saved.has(item.offer_id) && !workplaces.reportValidity()) return;
+    toggleApproval({item, count: workplaces.value, anchor: context.anchor});
+  });
   updateApprovalButton(button);
-  if (!anchor && item.bundle_available) {
-    filterButton(actions, "Подобрать комплект", () => loadBundle(item, context));
+  if (!context.anchor && item.bundle_available) {
+    filterButton(group, "Подобрать комплект", () => loadBundle(item, context));
   }
 }
 
@@ -222,3 +272,4 @@ document.querySelector("#quote-download").addEventListener("click", () => {
   download("waive-quote-request.txt", quoteText.value, "text/plain;charset=utf-8");
 });
 renderApproval();
+updateView({initial: true});
