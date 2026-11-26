@@ -388,7 +388,7 @@ form.addEventListener("submit", async (event) => {
     filterCount.hidden = !activeCount;
     showFilters(data);
     correction.hidden = !data.corrected_query;
-    correction.textContent = data.corrected_query ? "Искали по запросу «" + data.corrected_query + "»" : "";
+    correction.textContent = data.corrected_query ? "Запрос распознан как «" + data.corrected_query + "»." : "";
     status.textContent = data.clarification || "Результаты поиска · " + data.results.length;
   } catch (error) {
     if (error.name !== "AbortError") status.textContent = "Поиск временно недоступен. Попробуйте ещё раз.";

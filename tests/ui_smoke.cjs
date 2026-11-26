@@ -13,6 +13,8 @@ async function main() {
     page.on("pageerror", error => { throw error; });
     await page.goto(new URL("/?demo=true", process.env.WAIVE_TEST_URL || "http://127.0.0.1:8000").href);
     const input = page.getByRole("combobox", {name: "Название, бренд или артикул"});
+    assert.equal(await input.getAttribute("aria-describedby"), "search-help");
+    await page.getByText(/Начните вводить название или артикул/).waitFor();
     const filters = page.locator("#search-filters > summary");
     const stock = page.getByRole("checkbox", {name: "В наличии"});
     assert.equal(await stock.isVisible(), false);
@@ -55,7 +57,7 @@ async function main() {
     assert.deepEqual((await cards.locator("h2").allTextContents()).slice(0, 12), firstPage);
     await input.fill("касперчкий");
     await page.getByRole("button", {name: "Найти", exact: true}).click();
-    await page.getByText("Искали по запросу «Kaspersky»", {exact: true}).waitFor();
+    await page.getByText("Запрос распознан как «Kaspersky».", {exact: true}).waitFor();
     assert.equal(await cards.count(), 12);
     await input.fill("крипто пр");
     await page.getByRole("option", { name: /КриптоПро CSP TLS/i }).waitFor();

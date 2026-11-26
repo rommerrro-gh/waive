@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Waive | Поиск по каталогу</title>
   <link rel="stylesheet" href="/style.css">
-  <link rel="stylesheet" href="/catalog.css?v=4">
-  <script src="/search.js?v=6" defer></script>
+  <link rel="stylesheet" href="/catalog.css?v=5">
+  <script src="/search.js?v=7" defer></script>
   <script src="/procurement.js?v=2" defer></script>
 </head>
 <body class="catalog" data-view="search">
@@ -23,11 +23,12 @@
           <div class="query-field">
             <input id="query" name="q" type="search" required maxlength="200"
                    placeholder="Название, бренд или артикул" autocomplete="off" role="combobox"
-                   aria-autocomplete="list" aria-controls="suggestions" aria-expanded="false">
+                   aria-autocomplete="list" aria-controls="suggestions" aria-describedby="search-help" aria-expanded="false">
             <ul id="suggestions" role="listbox" aria-label="Подсказки поиска" hidden></ul>
           </div>
           <button type="submit">Найти</button>
         </div>
+        <p id="search-help">Начните вводить название или артикул, чтобы увидеть подсказки. Можно описать задачу, например «восстановить файлы после сбоя».</p>
       </div>
       <div class="catalog-controls">
         <details id="search-filters">
@@ -102,8 +103,8 @@
           <div id="comparison-items"></div>
           <button id="open-comparison" type="button" disabled>Сравнить предложения</button>
         </section>
-        <p id="status" role="status"></p>
         <p id="query-correction" role="status" hidden></p>
+        <p id="status" role="status"></p>
         <div id="filter-details" class="card-actions" hidden></div>
         <section id="results" class="cards" aria-label="Результаты поиска"></section>
         <div id="result-pagination" class="result-pagination" hidden>

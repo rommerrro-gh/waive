@@ -118,6 +118,12 @@
 .catalog #query { padding: .95rem 1rem; font-size: 1.08rem; }
 .catalog #query::placeholder { color: var(--muted); }
 .catalog .search-box button { min-width: 8rem; padding-inline: 1.3rem; }
+.catalog #search-help {
+  margin: .55rem 0 0;
+  color: var(--muted);
+  font-size: .875rem;
+  line-height: 1.45;
+}
 .catalog #suggestions { border-color: var(--edge); box-shadow: 0 .6rem 1.5rem #211c201c; }
 .catalog #suggestions li:hover,
 .catalog #suggestions li[aria-selected="true"] { background: var(--wash); }
@@ -202,6 +208,16 @@
 
 .catalog #status { margin-block: 1.25rem .8rem; color: var(--muted); }
 .catalog #status:empty { display: none; }
+.catalog #query-correction {
+  margin: 1rem 0 .55rem;
+  padding: .65rem .8rem;
+  border-left: 2px solid var(--brand);
+  border-radius: .3rem;
+  background: var(--wash);
+  font-size: .9rem;
+  overflow-wrap: anywhere;
+}
+.catalog #query-correction:not([hidden]) + #status { margin-top: .55rem; }
 .catalog .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .catalog .result-pagination {
   display: flex;
