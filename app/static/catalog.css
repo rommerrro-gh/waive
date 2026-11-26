@@ -203,6 +203,15 @@
 .catalog #status { margin-block: 1.25rem .8rem; color: var(--muted); }
 .catalog #status:empty { display: none; }
 .catalog .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.catalog .result-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: .55rem 1rem;
+  margin-block: 1.25rem;
+}
+.catalog .result-pagination p { margin: 0; color: var(--muted); font-size: .875rem; }
 .catalog[data-view="business"] .cards { grid-template-columns: minmax(0, 1fr); }
 
 .catalog .product-card {

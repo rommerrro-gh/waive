@@ -109,6 +109,7 @@ def find_products(
     in_stock: bool = False,
     price_min: Annotated[int | None, Query(ge=0, le=999_999_999)] = None,
     price_max: Annotated[int | None, Query(ge=0, le=999_999_999)] = None,
+    expanded: bool = False,
     track: bool = False,
     demo: bool = False,
     with_profile: bool = False,
@@ -141,7 +142,7 @@ def find_products(
             lexical = lexical_candidates(connection, snapshot, query)
             semantic_rows, used_model = semantic_candidates(connection, future, snapshot, revision)
             items, alternatives, recommendations = assemble_results(
-                connection, snapshot, query, lexical, semantic_rows, filters, diagnostics,
+                connection, snapshot, query, lexical, semantic_rows, filters, diagnostics, expanded=expanded,
             )
             if track:
                 track = record_search(
@@ -151,7 +152,7 @@ def find_products(
         raise HTTPException(503, "Поиск временно недоступен") from error
     return {
         "results": items,
-        "top4": items + recommendations,
+        "top4": items[:4] + recommendations,
         "alternatives": alternatives,
         "recommendations": recommendations,
         "applied_filters": filters,

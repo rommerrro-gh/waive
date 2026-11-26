@@ -1,6 +1,10 @@
 const form = document.querySelector("#search");
 const status = document.querySelector("#status");
 const results = document.querySelector("#results");
+const pagination = document.querySelector("#result-pagination");
+const progress = document.querySelector("#result-progress");
+const moreResults = document.querySelector("#more-results");
+const pageSize = 12;
 const query = document.querySelector("#query");
 const suggestions = document.querySelector("#suggestions");
 const comparisonBar = document.querySelector("#comparison-bar");
@@ -12,6 +16,7 @@ const filterCount = document.querySelector("#active-filters");
 const demoMode = new URLSearchParams(location.search).get("demo") === "true";
 const selected = new Map();
 let activeSearch;
+let resultSet;
 let activeSuggestion;
 let suggestionTimer;
 let activeOption = -1;
@@ -299,6 +304,23 @@ function validatePrice() {
     "Цена «От» должна быть не выше цены «До»" : "");
 }
 
+function showNextResults(focusNew = false) {
+  const {items, requestId, context} = resultSet;
+  const start = results.children.length;
+  const cards = items.slice(start, start + pageSize).map(item => productCard(item, requestId, context));
+  results.append(...cards);
+  const shown = results.children.length;
+  pagination.hidden = shown === items.length;
+  progress.textContent = "Показано " + shown + " из " + items.length;
+  if (focusNew && cards.length) {
+    const firstTitle = cards[0].querySelector("h2");
+    firstTitle.tabIndex = -1;
+    firstTitle.focus();
+  }
+}
+
+moreResults.addEventListener("click", () => showNextResults(true));
+
 form.addEventListener("input", validatePrice);
 form.addEventListener("invalid", event => {
   if (filterPanel.contains(event.target)) filterPanel.open = true;
@@ -311,7 +333,9 @@ form.addEventListener("submit", async (event) => {
   clearBundle();
   const controller = new AbortController();
   activeSearch = controller;
+  resultSet = undefined;
   results.replaceChildren();
+  pagination.hidden = true;
   for (const section of [filterSuggestions, filterDetails]) {
     section.replaceChildren();
     section.hidden = true;
@@ -322,6 +346,7 @@ form.addEventListener("submit", async (event) => {
   const params = new URLSearchParams(new FormData(form));
   for (const key of Object.keys(catalogFilterNames)) if (!params.get(key)) params.delete(key);
   params.set("track", "true");
+  params.set("expanded", "true");
   if (demoMode) params.set("demo", "true");
   if (isBusinessView() && profile) params.set("with_profile", "true");
   if (isBusinessView()) updateProfileControls();
@@ -333,7 +358,8 @@ form.addEventListener("submit", async (event) => {
     if (controller.signal.aborted) return;
     const requestId = data.tracked ? data.request_id : undefined;
     const context = {version: data.catalog_version, platform: params.get("platform")};
-    results.replaceChildren(...data.results.map(item => productCard(item, requestId, context)));
+    resultSet = {items: data.results, requestId, context};
+    showNextResults();
     renderSection("alternatives", data.alternatives, undefined, context);
     renderSection("recommendations", data.recommendations, requestId, context);
     const active = Object.keys(data.applied_filters);
@@ -341,7 +367,7 @@ form.addEventListener("submit", async (event) => {
     filterCount.textContent = activeCount ? " · " + activeCount : "";
     filterCount.hidden = !activeCount;
     showFilters(data);
-    status.textContent = data.clarification || "Результаты поиска";
+    status.textContent = data.clarification || "Результаты поиска · " + data.results.length;
   } catch (error) {
     if (error.name !== "AbortError") status.textContent = "Поиск временно недоступен. Попробуйте ещё раз.";
   }

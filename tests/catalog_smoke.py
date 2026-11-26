@@ -42,6 +42,12 @@ for query in ("AnyDesk", "КриптоПро CSP 5.0", "антивирус дл�
     if query.startswith("КриптоПро"):
         for card in result["results"]:
             assert re.search(r"(?<![\w.])5\.0(?![\w.])", card["attributes"].get("Версия") or card["name"])
+
+compact = get("/search?q=Kaspersky&semantic=false")
+expanded = get("/search?q=Kaspersky&semantic=false&expanded=true")
+assert len(expanded["results"]) > 12, expanded
+assert expanded["results"][:4] == compact["results"] == expanded["top4"]
+assert len({card["family_id"] for card in expanded["results"]}) == len(expanded["results"])
 office = get("/search?" + urlencode({"q": office_id, "semantic": "false"}))
 assert office["results"][0]["offer_id"] == office_id, office
 assert len(office["recommendations"]) > 0, office

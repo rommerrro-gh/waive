@@ -21,6 +21,16 @@ async function main() {
     assert.equal(await page.getByRole("spinbutton", {name: "Цена от, ₽"}).isVisible(), true);
     await filters.click();
     assert.equal(await stock.isVisible(), false);
+    await input.fill("Kaspersky");
+    await page.getByRole("button", {name: "Найти", exact: true}).click();
+    const more = page.getByRole("button", {name: "Показать ещё", exact: true});
+    const cards = page.locator("#results article");
+    await more.waitFor();
+    assert.equal(await cards.count(), 12);
+    const firstPage = await cards.locator("h2").allTextContents();
+    await more.click();
+    assert.ok(await cards.count() > firstPage.length);
+    assert.deepEqual((await cards.locator("h2").allTextContents()).slice(0, 12), firstPage);
     await input.fill("крипто пр");
     await page.getByRole("option", { name: /КриптоПро CSP TLS/i }).waitFor();
     assert.equal(await input.getAttribute("aria-expanded"), "true");
@@ -105,6 +115,7 @@ async function main() {
     await input.fill(process.env.BUNDLE_SMOKE_OFFER);
     await page.getByRole("button", {name: "Найти"}).click();
     await page.locator("#results article").first().getByRole("button", {name: "Подобрать комплект"}).click();
+    assert.equal(await more.isVisible(), false);
     const bundle = page.getByRole("region", {name: "Комплект для компании"});
     await bundle.getByText(/проверена совместимость по платформе/).waitFor();
     await bundle.locator("article").nth(1).getByRole("button", {name: "На согласование"}).click();

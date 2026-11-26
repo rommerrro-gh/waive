@@ -435,7 +435,7 @@ def purchase_family_offers(connection, snapshot, matching, query, versions):
     return sorted(seen.values(), key=lambda item: positions[family_key(item)])
 
 
-def assemble_results(connection, snapshot, query, lexical, semantic, filters=None, diagnostics=None):
+def assemble_results(connection, snapshot, query, lexical, semantic, filters=None, diagnostics=None, *, expanded=False):
     versions = set(VERSION.findall(query))
     # Длинные формулировки чаще описывают задачу. Версия и артикул сохраняют приоритет.
     natural_language = len(query.split()) >= 5 and not versions
@@ -455,9 +455,10 @@ def assemble_results(connection, snapshot, query, lexical, semantic, filters=Non
         count = len({family_key(item) for item in matching})
         diagnostics.update(families_before=count, families_after=count, conditions={})
     lexical_ids = {item["offer_id"] for item in lexical}
+    ranked = select_families(matching)
     results = [as_card(item, "Совпадение артикула или ID" if item["exact"] else (
         "Совпадение по каталогу" if item["offer_id"] in lexical_ids else "Похожее назначение продукта"
-    )) for item in select_families(matching)[:4]]
+    )) for item in (ranked if expanded else ranked[:4])]
     for card in results:
         card["match_type"] = "direct"
         card["bundle_available"] = (
