@@ -1,33 +1,19 @@
-name: Проверка доступа к поиску Softline
+name: Замер выдачи магазина Softline
 on:
   push:
     branches: [probe/softline-search]
 permissions:
   contents: read
 jobs:
-  probe:
+  collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 12
     steps:
-      - name: Выполнить один публичный поисковый запрос
-        run: |
-          python3 - <<'PY'
-          import re
-          from urllib.request import Request, urlopen
-          from urllib.error import HTTPError, URLError
-          from html import unescape
-
-          url = "https://store.softline.ru/search/?query=AnyDesk"
-          try:
-              with urlopen(Request(url, headers={"User-Agent": "Waive catalog comparison (single public request)"}), timeout=15) as response:
-                  html = response.read(2000000).decode("utf-8", "replace")
-                  print("HTTP:", response.status, "URL:", response.url, "HTML bytes:", len(html))
-          except (HTTPError, URLError, TimeoutError) as error:
-              print("Доступность:", getattr(error, "code", None), str(error))
-          else:
-              titles = re.findall(r"<(?:title|h1)[^>]*>(.*?)</(?:title|h1)>", html, re.I | re.S)
-              print("Заголовок:", [unescape(re.sub("<[^>]+>", "", item)).strip()[:220] for item in titles[:5]])
-              for line in re.findall(r'<[^<>]{0,300}AnyDesk[^<>]{0,350}>', html, re.I)[:18]:
-                  if "href=" in line or "class=" in line:
-                      print(line[:500])
-          PY
+      - uses: actions/checkout@v4
+      - name: Собрать первые четыре публичные карточки по 33 запросам
+        run: python3 scripts/compare_public_store.py --feed organizer-materials/Mindbox.xml.gz
+      - name: Сохранить замер публичной выдачи
+        uses: actions/upload-artifact@v4
+        with:
+          name: softline-live-results
+          path: softline-live-results.json
