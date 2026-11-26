@@ -14,7 +14,7 @@ CODE = re.compile(r"[A-Za-z0-9_.+-]{4,32}")
 WORD = re.compile(r"[A-Za-zА-Яа-я]{5,}")
 
 
-def catalog_cases(feed):
+def catalog_cases(feed, seed="waive-benchmark-v1:", count=40, excluded_groups=()):
     names = {}
     codes = collections.Counter()
     eligible = collections.defaultdict(list)
@@ -32,11 +32,13 @@ def catalog_cases(feed):
                     if 6 <= len(family) <= 100 and WORD.search(family):
                         eligible[group].append((item.get("id"), item.findtext("categoryId"), code, family))
                 item.clear()
-    ordered = sorted(eligible, key=lambda group: hashlib.sha256(("waive-benchmark-v1:" + group).encode()).digest())
+    ordered = sorted(eligible, key=lambda group: hashlib.sha256((seed + group).encode()).digest())
     selected = []
     category_counts = collections.Counter()
     used_queries = set()
     for group in ordered:
+        if group in excluded_groups:
+            continue
         name = names[group]
         if any(excluded.casefold() in name.casefold() for excluded in EXCLUDED_FAMILIES):
             continue
@@ -54,9 +56,9 @@ def catalog_cases(feed):
             used_queries.update(queries)
             category_counts[category] += 1
             break
-        if len(selected) == 40:
+        if len(selected) == count:
             break
-    if len(selected) != 40:
+    if len(selected) != count:
         raise RuntimeError("В каталоге недостаточно подходящих семейств для выбранного профиля")
     return [
         {"query": query, "segment": segment, "cluster": f"family-{index}",
@@ -68,3 +70,25 @@ def catalog_cases(feed):
             (typo, "Опечатка в названии", "group_id", group),
         )
     ]
+
+def extra_typos(feed, original):
+    groups = {row["accepted"][0] for row in original if row["field"] == "group_id"}
+    candidates = catalog_cases(feed, seed="waive-typo-holdout-v1:", count=80, excluded_groups=groups)
+    titles = [row for row in candidates if row["segment"] == "Название семейства"]
+    result = []
+    for index, row in enumerate(titles):
+        name = row["query"]
+        offset = WORD.search(name).start() + 2
+        substitution = "ж" if re.search(r"[А-Яа-я]", name[offset]) else "z"
+        if substitution.casefold() == name[offset].casefold():
+            substitution = "ф" if substitution == "ж" else "x"
+        variants = (
+            ("Перестановка", candidates[index * 3 + 2]["query"]),
+            ("Пропуск", name[:offset] + name[offset + 1:]),
+            ("Лишний символ", name[:offset] + name[offset] + name[offset:]),
+            ("Замена", name[:offset] + substitution + name[offset + 1:]),
+        )
+        segment, query = variants[index % len(variants)]
+        result.append({**row, "cluster": f"holdout-typo-{index}", "segment": segment,
+                       "query": query, "suite": "additional"})
+    return result

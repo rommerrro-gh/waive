@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
-from benchmark_dataset import catalog_cases
+from benchmark_dataset import catalog_cases, extra_typos
 from evaluate import CASES
 
 INTENTS = (
@@ -35,8 +35,33 @@ INTENTS = (
 )
 
 
+EXTRA_INTENTS = (
+    ("поработать на офисном компьютере из поездки", ("327029", "327030")),
+    ("войти в рабочий сеанс на пк из другого города", ("327029", "327030")),
+    ("создавать копии рабочих документов по расписанию", ("1033",)),
+    ("хранить снимки рабочих папок, чтобы не потерять содержимое", ("1033",)),
+    ("достать файлы с флешки после случайного удаления", ("5922",)),
+    ("восстановить удалённую папку с жёсткого диска", ("5922",)),
+    ("защитить компьютеры фирмы от троянов и вирусов", ("650",)),
+    ("антивирус на личный компьютер", ("3775",)),
+    ("настольное приложение для чтения электронной почты", ("1267",)),
+    ("один почтовый клиент для рабочих ящиков", ("1267",)),
+    ("открывать и редактировать текстовые документы и таблицы локально", ("1145", "222323")),
+    ("найти российское офисное по для организации", ("222323",)),
+    ("создать и одновременно запустить виртуальные машины на хосте", ("2500",)),
+    ("программа чтобы держать несколько гостевых ос на сервере", ("2500",)),
+    ("приобрести лицензию операционной системы Windows для компьютера", ("2050",)),
+    ("отечественная операционная система для рабочих станций", ("222320",)),
+    ("нужен стоечный сервер для офиса", ("86563",)),
+    ("настроить права сотрудников на внутренние сервисы", ("4742",)),
+    ("восстановить фотографии с отформатированной карты памяти", ("5922",)),
+    ("организовать автоматическое резервное копирование документов", ("1033",)),
+)
+
+
 def dataset(feed):
     rows = catalog_cases(feed)
+    additional = extra_typos(feed, rows)
     for index, (query, categories) in enumerate(INTENTS, 1):
         rows.append({"query": query, "segment": "Пользовательские задачи",
                      "cluster": f"intent-{index}", "field": "category_id", "accepted": categories})
@@ -46,7 +71,11 @@ def dataset(feed):
             "query": query, "segment": segment, "cluster": f"control-{index}", "field": field,
             "accepted": (expected,) if isinstance(expected, str) else expected,
         })
-    return rows
+    for index, (query, categories) in enumerate(EXTRA_INTENTS, 1):
+        additional.append({"query": query, "segment": "Новые пользовательские задачи",
+                           "cluster": f"new-intent-{index}", "field": "category_id",
+                           "accepted": categories, "suite": "additional"})
+    return rows + additional
 
 
 def is_hit(case, item):
@@ -84,19 +113,23 @@ def summary(rows, system):
     return {
         "queries": len(rows),
         "top1": sum(rank == 1 for rank in ranks),
+        "top2": sum(rank is not None and rank <= 2 for rank in ranks),
         "top4": sum(rank is not None for rank in ranks),
-        "mrr4": round(sum(1 / rank for rank in ranks if rank is not None) / len(rows), 4),
+        "mrr4": round(sum(1 / rank for rank in ranks if rank is not None) / len(rows), 4) if rows else None,
         "empty": sum(not item["items"] and item["error"] is None for item in observations),
         "errors": sum(item["error"] is not None for item in observations),
         "hybrid_responses": sum(item["mode"] == "hybrid" for item in observations),
+        "avg_ms": round(statistics.mean(latencies), 2) if latencies else None,
         "p50_ms": statistics.median(latencies) if latencies else None,
         "p95_ms": latencies[math.ceil(len(latencies) * 0.95) - 1] if latencies else None,
+        "p99_ms": latencies[math.ceil(len(latencies) * 0.99) - 1] if latencies else None,
     }
 
 
-def compare(baseline, current, categories, cases):
+def compare(baseline, previous, current, categories, cases):
     systems = {
         "historical": (baseline, False),
+        "previous_lexical": (previous, False),
         "current_lexical": (current, False),
         "current_hybrid": (current, True),
     }
@@ -121,14 +154,26 @@ def compare(baseline, current, categories, cases):
             )
             outputs[name] = item
         results.append({**case, "systems": outputs})
-    segments = ["Все", *dict.fromkeys(row["segment"] for row in results)]
+    sets = {
+        "Все": results,
+        "Исходная выборка": [row for row in results if row.get("suite") != "additional"],
+        "Дополнительные опечатки": [
+            row for row in results if row.get("suite") == "additional"
+            and row["field"] == "group_id"
+        ],
+    }
+    for row in results:
+        sets.setdefault(row["segment"], []).append(row)
     report = {}
-    for segment in segments:
-        rows = results if segment == "Все" else [row for row in results if row["segment"] == segment]
+    for segment, rows in sets.items():
         report[segment] = {name: summary(rows, name) for name in systems}
         historical_hits = {i for i, row in enumerate(rows) if row["systems"]["historical"]["first_relevant"]}
         hybrid_hits = {i for i, row in enumerate(rows) if row["systems"]["current_hybrid"]["first_relevant"]}
+        previous_hits = {i for i, row in enumerate(rows) if row["systems"]["previous_lexical"]["first_relevant"]}
+        current_hits = {i for i, row in enumerate(rows) if row["systems"]["current_lexical"]["first_relevant"]}
         report[segment]["paired"] = {
+            "only_current_lexical": len(current_hits - previous_hits),
+            "only_previous_lexical": len(previous_hits - current_hits),
             "only_hybrid": len(hybrid_hits - historical_hits),
             "only_historical": len(historical_hits - hybrid_hits),
         }
@@ -138,6 +183,7 @@ def compare(baseline, current, categories, cases):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", default="http://127.0.0.1:8002")
+    parser.add_argument("--previous", default="http://127.0.0.1:8003")
     parser.add_argument("--current", default="http://127.0.0.1:8000")
     parser.add_argument("--feed", type=Path, required=True)
     parser.add_argument("--catalog-id-map", type=Path, required=True)
@@ -145,11 +191,11 @@ def main():
     args = parser.parse_args()
     with args.catalog_id_map.open(encoding="utf-8", newline="") as mapping:
         categories = dict(csv.reader(mapping, delimiter="\t"))
-    report, rows = compare(args.baseline, args.current, categories, dataset(args.feed))
+    report, rows = compare(args.baseline, args.previous, args.current, categories, dataset(args.feed))
     args.output.write_text(json.dumps({"report": report}, ensure_ascii=False, indent=2) + "\n")
     for segment, result in report.items():
         print(json.dumps({"segment": segment, **result}, ensure_ascii=False), flush=True)
-    if any(report["Все"][system]["errors"] for system in ("historical", "current_lexical", "current_hybrid")):
+    if any(report["Все"][system]["errors"] for system in ("historical", "previous_lexical", "current_lexical", "current_hybrid")):
         raise SystemExit("Есть ошибки HTTP. Сводку нельзя считать полноценным замером")
     snapshots = {
         result["snapshot"] for row in rows for result in row["systems"].values()

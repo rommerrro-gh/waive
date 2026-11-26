@@ -31,7 +31,7 @@ jobs:
         run: docker compose logs
   semantic:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     env:
       POSTGRES_PASSWORD: waive-ci
       DATABASE_URL: postgresql://waive:waive-ci@db:5432/waive
@@ -65,10 +65,6 @@ jobs:
         run: |
           docker compose exec -T api sh -c 'cat > /tmp/evaluate.py' < scripts/evaluate.py
           docker compose exec -T -e PYTHONPATH=/app:/tmp api python - < scripts/diagnose_retrieval.py | tee search-diagnostics.jsonl
-      - name: Измерить задержку под пробной нагрузкой
-        run: |
-          python3 scripts/measure.py --mode lexical --requests 120 --rps 10 | tee search-load.jsonl
-          python3 scripts/measure.py --mode hybrid --requests 120 --rps 10 | tee -a search-load.jsonl
       - name: Сравнить поиск на расширенной выборке
         run: |
           git fetch --no-tags --depth=1 origin eb493e9fd7ff375819a7e6afb03d3ba7f1278846
@@ -78,8 +74,24 @@ jobs:
           network=$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "$(docker compose ps -q db)")
           docker run -d --name waive-historical --network "$network" -e DATABASE_URL -p 127.0.0.1:8002:8000 waive-historical
           curl --fail --retry 12 --retry-all-errors --retry-delay 1 http://127.0.0.1:8002/ready
+          git fetch --no-tags --depth=1 origin 210412506dee3b174fedd603eaa4465ac70bc7e6
+          previous_dir=$(mktemp -d)
+          git archive 210412506dee3b174fedd603eaa4465ac70bc7e6 Dockerfile app requirements.txt alembic.ini migrations | tar -x -C "$previous_dir"
+          docker build -t waive-previous "$previous_dir"
+          docker run -d --name waive-previous --network "$network" -e DATABASE_URL -p 127.0.0.1:8003:8000 waive-previous
+          curl --fail --retry 12 --retry-all-errors --retry-delay 1 http://127.0.0.1:8003/ready
           docker compose exec -T db psql -v ON_ERROR_STOP=1 -U waive -d waive -At -F $'\t' -c 'SELECT id, category_id FROM offer JOIN active_catalog ON offer.snapshot_id = active_catalog.snapshot_id' > "$RUNNER_TEMP/current-categories.tsv"
           python3 scripts/benchmark_search.py --feed organizer-materials/Mindbox.xml.gz --catalog-id-map "$RUNNER_TEMP/current-categories.tsv"
+      - name: Измерить задержку под пробной нагрузкой
+        run: |
+          echo "Ранняя версия"
+          python3 scripts/measure.py --url http://127.0.0.1:8002 --mode lexical --requests 120 --rps 10 | tee search-load.jsonl
+          echo "Текстовый режим до правки"
+          python3 scripts/measure.py --url http://127.0.0.1:8003 --mode lexical --requests 120 --rps 10 | tee -a search-load.jsonl
+          echo "Текстовый режим после правки"
+          python3 scripts/measure.py --mode lexical --requests 120 --rps 10 | tee -a search-load.jsonl
+          echo "Гибридный режим после правки"
+          python3 scripts/measure.py --mode hybrid --requests 120 --rps 10 | tee -a search-load.jsonl
       - name: Сохранить отчёт о качестве поиска
         uses: actions/upload-artifact@v4
         with:

@@ -52,6 +52,66 @@ FUZZY_OFFERS = """
 """
 
 
+NEARBY_FAMILIES = """
+    SELECT c.id, c.name
+    FROM category c
+    WHERE c.snapshot_id = %(snapshot)s
+      AND EXISTS (
+          SELECT 1 FROM offer o WHERE o.snapshot_id = c.snapshot_id AND o.group_id = c.id
+      )
+    ORDER BY lower(c.name) <-> lower(%(query)s)
+    LIMIT 24
+"""
+
+FAMILY_OFFERS = """
+    SELECT o.id AS offer_id, o.group_id, o.category_id, o.name, o.vendor, o.url,
+        o.price, o.currency, o.available, o.attributes, left(o.description, 1200) AS description,
+        false AS exact
+    FROM unnest(%(families)s::text[]) WITH ORDINALITY AS family(id, rank)
+    CROSS JOIN LATERAL (
+        SELECT * FROM offer
+        WHERE snapshot_id = %(snapshot)s AND group_id = family.id
+        ORDER BY available DESC, id
+        LIMIT 12
+    ) o
+    ORDER BY family.rank, o.available DESC, o.id
+"""
+
+
+def normal_form(text):
+    return " ".join(unescape(text).casefold().replace("ё", "е").split())
+
+
+def one_edit_title(query, title):
+    query, title = normal_form(query), normal_form(title)
+    if re.findall(r"\d+", query) != re.findall(r"\d+", title):
+        return False
+    if len(query) == len(title):
+        mismatches = [i for i, (left, right) in enumerate(zip(query, title)) if left != right]
+        if len(mismatches) <= 1:
+            return True
+        if len(mismatches) != 2:
+            return False
+        first, second = mismatches
+        return second == first + 1 and query[first:second + 1] == title[first:second + 1][::-1]
+    if abs(len(query) - len(title)) != 1:
+        return False
+    shorter, longer = sorted((query, title), key=len)
+    difference = next((i for i, (left, right) in enumerate(zip(shorter, longer)) if left != right), len(shorter))
+    return shorter[difference:] == longer[difference + 1:]
+
+
+def typo_candidates(connection, params):
+    families = connection.execute(NEARBY_FAMILIES, params).fetchall()
+    matching = [row["id"] for row in families if one_edit_title(params["query"], row["name"])]
+    if matching:
+        return connection.execute(FAMILY_OFFERS, {**params, "families": matching[:4]}).fetchall()
+    # Поддерживаем прежний поиск по похожим названиям отдельных предложений.
+    return connection.execute(FUZZY_OFFERS, params).fetchall()
+
+
+
+
 def matching_version(item, requested):
     if not requested:
         return True
@@ -125,28 +185,52 @@ def preferred_categories(query):
     if SERVER_REQUEST.fullmatch(query):
         return SERVER_CATEGORIES
     normalized = query.casefold().replace("ё", "е")
-    if re.search(r"удаленн\w* доступ|удаленн\w* рабоч\w* стол", normalized) or (
-        "из дома" in normalized and re.search(r"(подключ|зайти).*(компьютер|пк)", normalized)
-    ):
+    remote = re.search(r"удаленн\w* доступ|удаленн\w* рабоч\w* стол", normalized)
+    away = re.search(r"из дома|командировк|из друг\w* город|удаленн", normalized)
+    computer = re.search(r"компьютер|\bпк\b|рабоч\w* станци", normalized)
+    if remote or (away and computer and re.search(r"подключ|зайти|работат|сеанс|доступ", normalized)):
         return REMOTE_CATEGORIES
-    if re.search(r"резервн\w* копи|б[эе]кап|backup", normalized) or (
-        re.search(r"сохрани|сделат|созда", normalized)
-        and re.search(r"копи[юи]|копирован", normalized)
-        and re.search(r"файл|данн|документ", normalized)
+    if re.search(r"восстанов|вернут|достать|реанимир", normalized) and re.search(
+        r"файл|данн|форматирован|удален|накопител|флешк|жестк\w* диск", normalized
+    ):
+        return {"5922"}
+    if re.search(r"резервн\w* копи|б[эе]кап|\bbackup\b", normalized) or (
+        re.search(r"сохрани|сохран[яе]|сделат|созда", normalized)
+        and re.search(r"копи[юи]|копирован|верси", normalized)
+        and re.search(r"файл|данн|документ|папк", normalized)
     ):
         return {"1033"}
-    if re.search(r"защит|антивирус|антивирь", normalized) and re.search(
-        r"вирус|компьютер|рабоч\w* станци|сотрудник", normalized
-    ):
+    if re.search(r"антивирус|антивирь|защит.*вирус", normalized):
+        return {"3775"} if re.search(r"домашн|личн\w* (?:пк|компьютер)", normalized) else {"650"}
+    if re.search(r"защит", normalized) and re.search(r"рабоч\w* станци|сотрудник", normalized):
         return {"650"}
     if re.search(r"стойк|стоечн|rack", normalized) and re.search(
         r"\bсервер\b|сервер[ыа]\b|желез|оборудован", normalized
     ):
         return {"86563"}
-    if re.search(r"редактор|редактир|офисн\w* пакет", normalized) and re.search(
-        r"документ|текст", normalized
-    ) and re.search(r"таблиц", normalized):
+    office_documents = re.search(r"документ|текст", normalized) and re.search(r"таблиц", normalized)
+    if re.search(r"российск", normalized) and re.search(r"офисн\w* (?:пакет|по)", normalized):
+        return {"222323"}
+    if office_documents and re.search(r"редактор|редактир|офисн\w* пакет|работат|созда", normalized):
         return {"1145", "222323"}
+    if re.search(r"гипервизор|виртуальн\w* машин", normalized) and re.search(
+        r"гипервизор|запуск|запуст|созда|разверн|одновременно", normalized
+    ):
+        return {"2500"}
+    if re.search(r"почтов\w* клиент", normalized) or (
+        re.search(r"электронн\w* почт|почтов\w* ящик", normalized)
+        and re.search(r"клиент|настольн|приложени|открыва", normalized)
+    ):
+        return {"1267"}
+    if re.search(r"операционн\w* систем", normalized):
+        if re.search(r"\bwindows\b|винда", normalized):
+            return {"2050"}
+        if re.search(r"российск|отечественн", normalized):
+            return {"222320"}
+    if re.search(r"огранич|управля|настраив", normalized) and re.search(
+        r"доступ.*(?:ресурс|сотрудник)|права.*(?:сотрудник|команд|пользовател)", normalized
+    ):
+        return {"4742"}
     return set()
 
 
@@ -166,8 +250,8 @@ def lexical_candidates(connection, snapshot, query):
             return preferred
     candidates = connection.execute(SEARCH_OFFERS, params).fetchall()
     categories = preferred_categories(query)
-    if not candidates and not categories and len(query) >= 4 and len(query.split()) <= 4:
-        candidates = connection.execute(FUZZY_OFFERS, params).fetchall()
+    if not candidates and not categories and 4 <= len(query) <= 110 and len(query.split()) <= 12:
+        candidates = typo_candidates(connection, params)
     if categories and not any(item["category_id"] in categories for item in candidates):
         candidates.extend(connection.execute(CATEGORY_CANDIDATES, {
             "snapshot": snapshot, "categories": sorted(categories),

@@ -2,7 +2,7 @@ import unittest
 
 from app.search import (
     as_card, diversify, matches_product_variant, matching_version, merge_candidates,
-    preferred_categories,
+    one_edit_title, preferred_categories,
 )
 
 
@@ -49,6 +49,11 @@ class IntentTests(unittest.TestCase):
             ("защитить рабочие станции компании от вредоносных вирусов", {"650"}),
             ("подбор оборудования для монтажа в серверную стойку", {"86563"}),
             ("хочу редактировать текст и таблицы на работе", {"1145", "222323"}),
+            ("вернуть удалённые файлы с флешки", {"5922"}),
+            ("подключаться к офисному пк из командировки", {"327029", "327030"}),
+            ("антивирус для домашнего ноутбука", {"3775"}),
+            ("запустить виртуальные машины одновременно", {"2500"}),
+            ("отечественная операционная система для офиса", {"222320"}),
             ("обновить КриптоПро CSP 5.0", set()),
         ]
         for query, categories in cases:
@@ -62,3 +67,15 @@ class IntentTests(unittest.TestCase):
                                           (12, "b", False), (13, None, False)]
         ]
         self.assertEqual([item["offer_id"] for item in diversify(variants)], [10, 12, 13, 11])
+
+class TypoTests(unittest.TestCase):
+    def test_common_one_character_typos_in_full_titles(self):
+        for incorrect in ("Prgo Suite 2024", "Pro Sutite 2024", "Pro Sute 2024", "Pro Suize 2024"):
+            expected = "Prog Suite 2024" if incorrect.startswith("Prgo") else "Pro Suite 2024"
+            with self.subTest(incorrect=incorrect):
+                self.assertTrue(one_edit_title(incorrect, expected))
+
+    def test_numbers_never_changed_by_typo_repair(self):
+        self.assertFalse(one_edit_title("Сервер Pro 2023", "Сервер Pro 2024"))
+        self.assertFalse(one_edit_title("Product 501", "Product 510"))
+        self.assertFalse(one_edit_title("Office Suite", "Antivirus Suite"))
