@@ -46,16 +46,16 @@ class E5Spelling:
         finally:
             self._initializing.release()
 
-    def rank_vendors(self, head, candidates):
+    def rank_candidates(self, head, candidates, *, minimum=.85):
         if not candidates or not self._encoding.acquire(blocking=False):
             return []
         try:
             source, *embeddings = self._encode([head, *candidates])
             scored = [(cosine(source, vector), candidate)
                       for candidate, vector in zip(candidates, embeddings, strict=True)]
-            return sorted((item for item in scored if item[0] >= .85), reverse=True)
+            return sorted((item for item in scored if item[0] >= minimum), reverse=True)
         except (OSError, ValueError, TypeError, KeyError) as error:
-            logger.debug("Не удалось оценить производителей через E5 (%s)", type(error).__name__)
+            logger.debug("Не удалось оценить варианты через E5 (%s)", type(error).__name__)
             return []
         finally:
             self._encoding.release()

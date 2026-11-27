@@ -6,7 +6,7 @@ from app.procurement import filter_offers, positive_query
 from app.relations import alternative_difference, category_coverage, comparable_offer, compatibility_evidence
 from app.requirements import catalog_os, check_requirement, parse_requirements, unmet_requirements
 from app.vendor_spellings import FIT_REFERENCE
-from app.spelling import clear_winner, rank_spellings
+from app.spelling import TRANSLITERATION, clear_winner, rank_spellings, words
 
 NORMALIZATIONS = (
     (re.compile(r"\bкрипто[ -]+про\b", re.IGNORECASE), "КриптоПро"),
@@ -379,6 +379,85 @@ def lexical_candidates(connection, snapshot, query, *, allow_fuzzy=True):
     return candidates
 
 
+def title_evidence(item, terms):
+    title = words(unescape(item["name"]))
+    vendor = words(unescape(item.get("vendor") or ""))
+    if vendor:
+        for start in range(len(title) - len(vendor) + 1):
+            if title[start:start + len(vendor)] == vendor:
+                del title[start:start + len(vendor)]
+                break
+    evidence = int(bool(terms.intersection(vendor)))
+    for position, term in enumerate(title):
+        if term not in terms:
+            continue
+        if position == 0 or (position == 1 and title[0] in vendor):
+            return 3
+        if title[position - 1] not in {"для", "for", "под"}:
+            evidence = max(evidence, 2)
+        else:
+            evidence = max(evidence, 1)
+    return evidence
+
+
+PRODUCT_TITLE_TERMS = """
+    SELECT matched[1] AS term, count(DISTINCT s.offer_id) AS offers
+    FROM offer_search s
+    CROSS JOIN LATERAL regexp_matches(s.name_normalized, %(pattern)s, 'g') AS matched
+    WHERE s.snapshot_id = %(snapshot)s AND s.document @@ to_tsquery('simple', %(keywords)s)
+    GROUP BY matched[1] ORDER BY term
+"""
+
+
+def title_spellings(value):
+    roman = normal_form(value).translate(TRANSLITERATION)
+    vowels = (("ayt", "ight"), ("um", "oom"), ("chap", "chup"))
+    consonants = (("dzh", "g"), ("f", "ph"), ("z", "s"), ("ks", "x"), ("ks", "xc"), ("k", "c"))
+    variants = {roman}
+    for before, after in (*vowels, *consonants):
+        variants.update({name.replace(before, after, 1) for name in variants if before in name})
+    return sorted(variants, key=lambda name: (abs(len(name) - len(roman)), name))[:32]
+
+
+@dataclass
+class TitleMatch:
+    lookup: str
+    terms: set[str]
+    rows: list
+
+
+def resolve_title_transcription(connection, snapshot, query, speller):
+    if not speller or len(query.split()) > 4 or resolve_search_input(query).casefold() != query.casefold():
+        return None
+    head, separator, suffix = query.partition(" ")
+    if not re.fullmatch(r"[а-яё]{4,24}", head, re.I) or preferred_categories(query):
+        return None
+    spellings = title_spellings(head)
+    if not any(spellings):
+        return None
+    options = connection.execute(PRODUCT_TITLE_TERMS, {
+        "snapshot": snapshot, "keywords": " | ".join(spellings),
+        "pattern": r"\m(" + "|".join(spellings) + r")\M",
+    }).fetchall()
+    title_counts = {row["term"]: row["offers"] for row in options}
+    ranked = speller.rank_candidates(head, list(title_counts), minimum=.82)
+    confirmed = []
+    for score, term in ranked[:3]:
+        lookup = term + separator + suffix
+        rows = [item for item in lexical_candidates(connection, snapshot, lookup, allow_fuzzy=False)
+                if title_evidence(item, {term}) >= 2]
+        if rows:
+            confirmed.append((score, term, lookup, rows))
+    if not confirmed:
+        return None
+    close = [candidate for candidate in confirmed if confirmed[0][0] - candidate[0] < .025]
+    close.sort(key=lambda candidate: title_counts[candidate[1]], reverse=True)
+    if len(close) > 1 and title_counts[close[0][1]] < 4 * title_counts[close[1][1]]:
+        return None
+    _, term, lookup, rows = close[0]
+    return TitleMatch(lookup, {normal_form(head), term}, rows)
+
+
 def merge_candidates(lexical, semantic, lexical_weight):
     scores = {}
     items = {}
@@ -573,7 +652,7 @@ def named_families(connection, snapshot, intent, lexical):
 
 
 def assemble_results(connection, snapshot, query, lexical, semantic, filters=None, diagnostics=None, *,
-                     expanded=False, coverage=None, intent_query=None, vendor=None):
+                     expanded=False, coverage=None, intent_query=None, vendor=None, title_match=None):
     versions = set(VERSION.findall(query))
     # Длинные формулировки чаще описывают задачу. Версия и артикул сохраняют приоритет.
     natural_language = len(query.split()) >= 5 and not versions
@@ -604,7 +683,8 @@ def assemble_results(connection, snapshot, query, lexical, semantic, filters=Non
                 and (not categories or item["category_id"] in categories)
                 and (not families or item["group_id"] in families)
                 and (not use_vendor or vendor_matches(item, brand))
-                and (not brand_in_title or brand_in_title.search(normal_form(item["name"]))))
+                and (not brand_in_title or brand_in_title.search(normal_form(item["name"])))
+                and (not title_match or title_evidence(item, title_match.terms)))
 
     matching = [item for item in merged if matches_product_variant(item, query, versions)
                 and matches(item)]
@@ -641,6 +721,11 @@ def assemble_results(connection, snapshot, query, lexical, semantic, filters=Non
         ranked.sort(key=lambda item: (item["exact"], sum(
             check_requirement(item, card_attributes(item), requirement) is True for requirement in preferences
         )), reverse=True)
+    terms = title_match.terms if title_match else set()
+    if not terms and not vendor and not vpn and re.fullmatch(r"[^\W\d_]{4,40}", intent):
+        terms = {normal_form(intent)}
+    if terms:
+        ranked.sort(key=lambda item: (item["exact"], title_evidence(item, terms)), reverse=True)
     results = [as_card(item, "Совпадение артикула или ID" if item["exact"] else (
         "Совпадение по каталогу" if item["offer_id"] in lexical_ids else "Похожее назначение продукта"
     )) for item in (ranked if expanded else ranked[:4])]
@@ -904,7 +989,7 @@ def resolve_catalog_query(connection, snapshot, query, *, prefixes=None, speller
     if speller and vendor_index and not completions and re.match(r"[а-яё]{4}", query, re.I):
         index = vendor_index(connection, snapshot)
         head, suffix, candidates, exact = index.candidates(query, complete_prefix=complete_vendor)
-        ranked_vendors = speller.rank_vendors(head, candidates)
+        ranked_vendors = speller.rank_candidates(head, candidates)
         matches = []
         for score, vendor in ranked_vendors[:6]:
             label = vendor + suffix

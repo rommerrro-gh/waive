@@ -10,7 +10,7 @@ from app.vendor_spellings import VendorSpellings
 from app.search import (
     as_card, is_kaspersky_query, matches_product_variant, matching_version, merge_candidates,
     one_edit_title, preferred_categories, recommend_for_anchor, resolve_catalog_query, resolve_search_input, resolve_suggestion_alias,
-    select_families, vpn_offer, vpn_requested,
+    select_families, title_evidence, title_spellings, vpn_offer, vpn_requested,
 )
 
 
@@ -137,7 +137,17 @@ class TypoTests(unittest.TestCase):
     def test_vendor_ranking_filters_weak_matches(self):
         embed = Mock(return_value=("current", [[1., 0.], [.1, .995], [1., 0.]]))
         speller = E5Spelling({}, "current", embed)
-        self.assertEqual(speller.rank_vendors("канон", ["Kanon", "Canon"]), [(1.0, "Canon")])
+        self.assertEqual(speller.rank_candidates("канон", ["Kanon", "Canon"]), [(1.0, "Canon")])
+
+    def test_title_match_is_stronger_than_vendor_or_description(self):
+        terms = {"digital", "диджитал"}
+        self.assertEqual(title_evidence({"name": "Liqvid Digital Signage", "vendor": "Liqvid"}, terms), 3)
+        self.assertEqual(title_evidence({"name": "Диск Western Digital Ultrastar", "vendor": "Western Digital"}, terms), 1)
+        self.assertEqual(title_evidence({"name": "NAVITEL", "vendor": "NAVITEL", "description": "Digital"}, terms), 0)
+        self.assertEqual(title_evidence({"name": "V-Ray for SketchUp", "vendor": "Chaos Group"}, {"sketchup"}), 1)
+        for query, term in (("диджитал", "digital"), ("фотошоп", "photoshop"), ("визио", "visio"),
+                            ("эксель", "excel"), ("акробат", "acrobat"), ("скетчап", "sketchup")):
+            self.assertIn(term, title_spellings(query), query)
 
     def test_multiple_edits_and_ambiguity(self):
         ranked = rank_spellings("каспрсикй", [("Kaspersky", "касперский"), ("Cactus", "кактус")])

@@ -27,7 +27,7 @@ from app.requirements import parse_requirements, retrieval_query
 from app.embeddings import vector_literal, vectors
 from app.search import (
     BRAND_BY_NAME, SEMANTIC_OFFERS, SPELLING_ALIASES, as_card, assemble_results, bundle_available, catalog_identifier, load_category_coverage,
-    is_kaspersky_query, recommend_for_anchor, resolve_catalog_query, suggest_families,
+    is_kaspersky_query, recommend_for_anchor, resolve_catalog_query, resolve_title_transcription, suggest_families, title_evidence,
 )
 
 logger = logging.getLogger(__name__)
@@ -138,20 +138,28 @@ def suggest(q: Annotated[str, Query(max_length=120)]):
         with app.state.pool.connection() as connection:
             active = connection.execute("SELECT snapshot_id FROM active_catalog").fetchone()
             items = suggest_families(connection, active["snapshot_id"], query) if active else []
-            if active and not items:
+            if active:
                 snapshot = active["snapshot_id"]
-                decision = resolve_catalog_query(
-                    connection, snapshot, query, prefixes=items, speller=app.state.speller,
-                    vendor_index=snapshot_vendor_spellings, complete_vendor=True,
-                )
-                items = decision.choices
-                if decision.compatibility:
-                    items = [decision.lookup]
-                elif decision.lexical:
-                    if decision.lookup.casefold() != query.casefold() or decision.lookup.casefold() in BRAND_BY_NAME:
+                title = resolve_title_transcription(connection, snapshot, query, app.state.speller)
+                if not items or title:
+                    decision = resolve_catalog_query(
+                        connection, snapshot, query, prefixes=items, speller=app.state.speller,
+                        vendor_index=snapshot_vendor_spellings, complete_vendor=True,
+                    )
+                    if decision.compatibility:
+                        items = [decision.lookup]
+                    elif decision.vendor or (decision.lexical and decision.lookup.casefold() != query.casefold()):
                         items = [decision.lookup, *suggest_families(connection, snapshot, decision.lookup)]
+                    elif title:
+                        products = sorted(title.rows, key=lambda row: title_evidence(row, title.terms), reverse=True)
+                        items = [unescape(row["name"]) for row in products if row["available"]] + items
+                    elif decision.lexical:
+                        if decision.lookup.casefold() in BRAND_BY_NAME:
+                            items = [decision.lookup, *suggest_families(connection, snapshot, decision.lookup)]
+                        else:
+                            items = [unescape(row["name"]) for row in decision.lexical if row["available"]]
                     else:
-                        items = [unescape(row["name"]) for row in decision.lexical if row["available"]]
+                        items = decision.choices
             items = list(dict.fromkeys(items))[:6]
     except (OperationalError, PoolTimeout, QueryCanceled) as error:
         raise HTTPException(503, "Подсказки временно недоступны") from error
@@ -228,6 +236,17 @@ def find_products(
             )
             lookup, lexical, spellings = decision.lookup, decision.lexical, decision.choices
             vendor = decision.vendor
+            title = None
+            if (not vendor and not decision.compatibility and lookup.casefold() == query.casefold()
+                    and not any(item["exact"] for item in lexical)):
+                title = resolve_title_transcription(connection, snapshot, query, app.state.speller)
+                if title:
+                    native = any(title_evidence(item, {query.split()[0].casefold()}) for item in lexical)
+                    existing = {item["offer_id"] for item in lexical}
+                    lexical.extend(row for row in title.rows if row["offer_id"] not in existing)
+                    spellings = []
+                    if not native:
+                        lookup = title.lookup
             intent = retrieval_query(lookup) if parse_requirements(lookup) else lookup
             if intent != lookup and not decision.compatibility and not spellings and not any(item["exact"] for item in lexical):
                 narrowed = resolve_catalog_query(
@@ -247,7 +266,7 @@ def find_products(
             revision = os.environ.get("MODEL_REVISION")
             indexed = None
             allow_semantic = not spellings and (lexical or len(query.split()) >= 3)
-            if (semantic and allow_semantic and not decision.compatibility and not brand_only and not catalog_identifier(query)
+            if (semantic and allow_semantic and not title and not decision.compatibility and not brand_only and not catalog_identifier(query)
                     and not any(item["exact"] for item in lexical) and revision and os.environ.get("EMBEDDING_URL")):
                 indexed = connection.execute("""
                     SELECT 1 FROM semantic_catalog WHERE snapshot_id = %s AND model_revision = %s
@@ -259,7 +278,7 @@ def find_products(
                 semantic_rows = [item for item in semantic_rows if item["offer_id"] in lexical_ids]
             items, alternatives, recommendations = assemble_results(
                 connection, snapshot, lookup, lexical, semantic_rows, filters, diagnostics,
-                expanded=expanded, coverage=snapshot_coverage(connection, snapshot), intent_query=intent, vendor=vendor,
+                expanded=expanded, coverage=snapshot_coverage(connection, snapshot), intent_query=intent, vendor=vendor, title_match=title,
             )
             if decision.compatibility:
                 for item in items:
