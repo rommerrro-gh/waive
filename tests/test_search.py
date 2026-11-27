@@ -1,9 +1,18 @@
+import gzip
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import Mock, patch
+
+from app.brand_recovery import load_model, recover_brand
+from app.relations import category_coverage, comparable_offer, compatibility_evidence
+from app.requirements import parse_requirements, unmet_requirements
 from app.spelling import clear_winner, rank_spellings
 
 from app.search import (
-    as_card, compatibility, fill_recommendations, is_kaspersky_query, matches_product_variant, matching_version, merge_candidates,
-    one_edit_title, preferred_categories, resolve_search_input, resolve_suggestion_alias, select_families,
+    as_card, is_kaspersky_query, matches_product_variant, matching_version, merge_candidates,
+    one_edit_title, preferred_categories, recommend_for_anchor, resolve_catalog_query, resolve_search_input, resolve_suggestion_alias,
+    select_families,
 )
 
 
@@ -63,6 +72,38 @@ class IntentTests(unittest.TestCase):
 
 
 class TypoTests(unittest.TestCase):
+    def test_unusable_model_leaves_catalog_repair_operational(self):
+        self.addCleanup(load_model.cache_clear)
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "weights.json.gz"
+            for payload in (None, b"not gzip", gzip.compress(b"invalid json"), gzip.compress(b"{}")):
+                if payload is not None:
+                    path.write_bytes(payload)
+                load_model.cache_clear()
+                with self.subTest(payload=payload), patch("app.brand_recovery.MODEL_PATH", path), \
+                        self.assertLogs("app.brand_recovery", level="WARNING") as logs, \
+                        patch("app.search.catalog_spelling_options", return_value=[(8, "Kaspersky")]), \
+                        patch("app.search.lexical_candidates", side_effect=[[], [{"vendor": "Kaspersky"}]]):
+                    self.assertIsNone(load_model())
+                    decision = resolve_catalog_query(None, 1, "Kaspreskky", prefixes=[])
+                    self.assertEqual(decision.lookup, "Kaspersky")
+                    self.assertEqual(len(logs.output), 1)
+
+    def test_vpn_normalization_keeps_surrounding_words(self):
+        self.assertEqual(resolve_search_input("ВПН"), "VPN")
+        self.assertEqual(resolve_search_input("Kaspersky впн"), "Kaspersky VPN")
+        self.assertEqual(resolve_search_input("впнтермин"), "впнтермин")
+
+    def test_trained_model_recovers_brands_without_catalog_candidates(self):
+        for query, brand in (("качпеоский", "Kaspersky"), ("мимкосотф", "Microsoft"), ("адинэсс", "AnyDesk")):
+            with self.subTest(query=query):
+                self.assertEqual(recover_brand(query), brand)
+
+    def test_brand_model_abstains_on_unrelated_words_and_identifiers(self):
+        for query in ("микроскоп", "каспийское", "космический", "КриптоПро CSP 5.0", "KL8072RMZZZ"):
+            with self.subTest(query=query):
+                self.assertIsNone(recover_brand(query))
+
     def test_multiple_edits_and_ambiguity(self):
         ranked = rank_spellings("каспрсикй", [("Kaspersky", "касперский"), ("Cactus", "кактус")])
         self.assertEqual([label for _, label in ranked], ["Kaspersky"])
@@ -136,20 +177,68 @@ class FamilyOutputTests(unittest.TestCase):
     def test_upsell_uses_catalog_platform_and_checks_buyer_type(self):
         office = self.card("office", "1145", "Windows 11")
         valid = self.card("valid", "650", "Windows 10/Windows 11")
-        self.assertEqual(compatibility(office, valid, "", "650")["matched_platforms"], ["windows 11"])
-        self.assertIsNone(compatibility(office, self.card("old", "650", "Windows 10"), "", "650"))
-        self.assertIsNone(compatibility(office, self.card("blank", "650", ""), "", "650"))
-        self.assertIsNone(compatibility(office, self.card("home", "650", "Windows 11", "физлицо"), "", "650"))
-        self.assertIsNone(compatibility(office, {**valid, "name": "Mail Server Security"}, "", "650"))
+        coverage = category_coverage({"1145": ("Офисные программы", None), "650": ("Антивирусы", None)}, {"1145", "650"})
+        connection = Mock()
+        connection.execute.return_value = [
+            self.card("old", "650", "Windows 10"), self.card("blank", "650", ""),
+            self.card("home", "650", "Windows 11", "физлицо"),
+            {**valid, "offer_id": "mail", "name": "Mail Server Security"}, valid,
+        ]
+        items, status = recommend_for_anchor(connection, 1, office, coverage)
+        self.assertEqual(status, "confirmed")
+        self.assertEqual([item["offer_id"] for item in items], ["valid"])
+        self.assertEqual(items[0]["compatibility"]["matched_platforms"], ["windows 11"])
 
-    def test_verified_doprodazhi_fill_only_remaining_slots(self):
-        from unittest.mock import Mock
+    def test_verified_doprodazhi_deduplicate_and_respect_limit(self):
         office = self.card("office", "1145", "Windows")
-        second = self.card("another", "1145", "Windows")
         unverified = self.card("invalid", "650", "")
         verified = [self.card(f"ok-{i}", "650", "Windows") for i in range(3)]
+        coverage = category_coverage({"1145": ("Офисные программы", None), "650": ("Антивирусы", None)}, {"1145", "650"})
         connection = Mock()
         connection.execute.return_value = iter([unverified, verified[0], verified[0], *verified[1:]])
-        results = fill_recommendations(connection, 1, "", [office, second])
+        results, _ = recommend_for_anchor(connection, 1, office, coverage, limit=2)
         self.assertEqual([item["offer_id"] for item in results], ["ok-0", "ok-1"])
         self.assertTrue(all(item["compatibility"]["matched_platforms"] for item in results))
+
+
+class CatalogRequirementsTests(unittest.TestCase):
+    def test_requirements_must_apply_to_one_offer(self):
+        query = "Защита для Windows 11, на 50 рабочих мест, без подписки, до 12 000 ₽"
+        requirements = parse_requirements(query)
+        attributes = {"Платформа": "Windows 11", "К-во узлов": "50", "Тип лицензии": "Полная версия"}
+        row = {"name": "Endpoint Protection", "price": 10_000, "currency": "RUB", "available": True}
+        self.assertFalse(unmet_requirements(row, attributes, requirements))
+        self.assertTrue(unmet_requirements(row, {**attributes, "Тип лицензии": "Подписка"}, requirements))
+        self.assertTrue(unmet_requirements(row, {**attributes, "Платформа": "Windows"}, requirements))
+        failures = unmet_requirements(row, {**attributes, "К-во узлов": "", "Минимальная покупка": "50"}, requirements)
+        self.assertTrue(any(requirement.key == "devices" and state is None for requirement, state in failures))
+
+    def test_platform_as_product_name_does_not_exclude_operating_systems(self):
+        self.assertFalse(parse_requirements("Astra Linux"))
+        self.assertEqual(preferred_categories("Astra Linux"), {"222320"})
+
+    def test_explicit_alternative_platforms_accept_either_confirmed_os(self):
+        requirements = parse_requirements("антивирус для Windows 11 или macOS")
+        offer = {"name": "Endpoint Security"}
+        self.assertFalse(unmet_requirements(offer, {"Платформа": "macOS"}, requirements))
+        self.assertFalse(unmet_requirements(offer, {"Платформа": "Windows 11"}, requirements))
+        self.assertTrue(unmet_requirements(offer, {"Платформа": "Windows 10"}, requirements))
+
+    def test_preference_does_not_exclude_candidate(self):
+        requirements = parse_requirements("антивирус, желательно до 5 000 ₽")
+        self.assertEqual([(req.key, req.mandatory) for req in requirements], [("price_max", False)])
+        self.assertFalse(unmet_requirements({"name": "Антивирус", "price": 6000, "currency": "RUB"}, {}, requirements))
+
+    def test_physical_and_product_specific_compatibility_require_evidence(self):
+        def card(name, **attributes):
+            return {"name": name, "attributes": attributes}
+
+        self.assertTrue(compatibility_evidence(card("Ноутбук", **{"Разъёмы USB 3.2": "2"}),
+                                               card("Клавиатура", Интерфейс="USB"), "usb"))
+        self.assertIsNone(compatibility_evidence(card("Ноутбук", **{"Разъёмы Type-C": "1"}),
+                                                card("Док", Интерфейс="USB-C"), "dock"))
+        printer = card("HP LaserJet M404dn")
+        self.assertTrue(compatibility_evidence(printer, card("Тонер", **{"Модель принтера": "M404dn"}), "printer"))
+        self.assertIsNone(compatibility_evidence(printer, card("Тонер", **{"Модель принтера": "M404"}), "printer"))
+        self.assertFalse(comparable_offer(card("Тонер", **{"Модель принтера": "M404dn"}),
+                                          card("Тонер", **{"Модель принтера": "M404"})))

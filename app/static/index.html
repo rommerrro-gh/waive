@@ -5,14 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Waive | Поиск по каталогу</title>
   <link rel="stylesheet" href="/style.css">
-  <link rel="stylesheet" href="/catalog.css?v=6">
-  <script src="/search.js?v=8" defer></script>
-  <script src="/procurement.js?v=3" defer></script>
+  <link rel="stylesheet" href="/catalog.css?v=8">
+  <script src="/search.js?v=10" defer></script>
+  <script src="/procurement.js?v=5" defer></script>
 </head>
 <body class="catalog" data-view="search">
   <header class="site-header catalog-shell">
-    <a class="wordmark" href="/" aria-label="Waive, поиск по каталогу">Waive</a>
-    <a class="outline-link" id="back-to-search" href="/" hidden>К поиску по каталогу</a>
+    <a class="wordmark" href="/" aria-label="Waive, поиск по каталогу"><img src="/catalog-art/waive-mark.webp" alt="" width="62" height="34">Waive</a>
   </header>
   <main class="catalog-shell">
     <h1 id="page-title">Поиск по каталогу Softline</h1>
@@ -21,6 +20,7 @@
         <label class="visually-hidden" for="query">Название, бренд или артикул</label>
         <div class="field">
           <div class="query-field">
+            <img class="search-icon" src="/icons/search.svg" alt="" width="26" height="26">
             <input id="query" name="q" type="search" required maxlength="200"
                    placeholder="Название, бренд или артикул" autocomplete="off" role="combobox"
                    aria-autocomplete="list" aria-controls="suggestions" aria-describedby="search-help" aria-expanded="false">
@@ -30,12 +30,49 @@
         </div>
         <p id="search-help">Начните вводить название или артикул, чтобы увидеть подсказки. Можно описать задачу, например «восстановить файлы после сбоя».</p>
       </div>
+      <div class="search-followup">
+        <div class="search-feedback">
+          <p id="query-correction" role="status" hidden>Результаты для <strong></strong></p>
+          <section id="spelling-options" aria-labelledby="spelling-title" hidden>
+            <h2 id="spelling-title">Возможно, вы имели в виду</h2>
+            <div class="card-actions"></div>
+          </section>
+        </div>
+        <div class="search-actions">
+          <button class="secondary" id="toggle-comparison" type="button" aria-controls="comparison-bar" aria-expanded="false" hidden>
+            <img src="/icons/bar-chart.svg" width="20" height="20" alt="">
+            <span>Сравнение</span>
+          </button>
+          <a class="outline-link" id="business-link" href="/business">Закупки для бизнеса</a>
+          <a class="outline-link" id="back-to-search" href="/" hidden>К поиску по каталогу</a>
+          <section id="comparison-bar" class="comparison-bar" aria-label="Выбранные предложения" tabindex="-1" hidden>
+            <p id="comparison-count"></p>
+            <div id="comparison-items"></div>
+            <button id="open-comparison" type="button" disabled>Сравнить предложения</button>
+          </section>
+          <span id="comparison-announcement" class="visually-hidden" role="status"></span>
+        </div>
+      </div>
       <div class="catalog-controls">
         <details id="search-filters">
-          <summary>Фильтры <span id="active-filters" hidden></span></summary>
+          <summary><span>Фильтры <span id="active-filters" hidden></span></span><img src="/icons/chevron-down.svg" alt="" width="16" height="16"></summary>
           <div class="filter-panel">
+            <div class="catalog-facets">
+              <label class="stock-filter"><input type="checkbox" name="in_stock" value="true"> В наличии</label>
+              <fieldset class="price-filter">
+                <legend>Цена, ₽</legend>
+                <label><span class="visually-hidden">Цена от, ₽</span><input type="number" name="price_min" min="0" max="999999999" step="1" inputmode="numeric" placeholder="От"></label>
+                <label><span class="visually-hidden">Цена до, ₽</span><input type="number" name="price_max" min="0" max="999999999" step="1" inputmode="numeric" placeholder="До"></label>
+              </fieldset>
+            </div>
+            <details id="category-filters" class="category-filter" open hidden>
+              <summary>Категория <img src="/icons/chevron-down.svg" alt="" width="16" height="16"></summary>
+              <div id="category-options"></div>
+            </details>
+            <details class="license-filters">
+              <summary>Условия лицензии <img src="/icons/chevron-down.svg" alt="" width="16" height="16"></summary>
             <fieldset class="purchase-filters">
-              <legend>Условия поиска</legend>
+              <legend class="visually-hidden">Условия лицензии</legend>
               <label>Платформа
                 <select name="platform">
                   <option value="">Любая</option>
@@ -68,18 +105,13 @@
                 </select>
               </label>
             </fieldset>
-            <div class="catalog-facets">
-              <label class="stock-filter"><input type="checkbox" name="in_stock" value="true"> В наличии</label>
-              <fieldset class="price-filter">
-                <legend>Цена, ₽</legend>
-                <label><span class="visually-hidden">Цена от, ₽</span><input type="number" name="price_min" min="0" max="999999999" step="1" inputmode="numeric" placeholder="От"></label>
-                <label><span class="visually-hidden">Цена до, ₽</span><input type="number" name="price_max" min="0" max="999999999" step="1" inputmode="numeric" placeholder="До"></label>
-              </fieldset>
+            </details>
+            <div class="filter-actions">
               <button class="secondary apply-filters" type="submit">Применить</button>
+              <button id="reset-filters" class="secondary" type="button" disabled>Сбросить фильтры</button>
             </div>
           </div>
         </details>
-        <a class="outline-link" id="business-link" href="/business">Закупки для бизнеса</a>
       </div>
       <div id="filter-suggestions" class="card-actions" aria-label="Предложенные фильтры" hidden></div>
     </form>
@@ -98,17 +130,16 @@
     </section>
     <div class="catalog-layout">
       <div class="catalog-results">
-        <section id="comparison-bar" class="comparison-bar" aria-label="Выбранные предложения" hidden>
-          <p id="comparison-count" role="status"></p>
-          <div id="comparison-items"></div>
-          <button id="open-comparison" type="button" disabled>Сравнить предложения</button>
-        </section>
-        <p id="query-correction" role="status" hidden></p>
-        <section id="spelling-options" aria-labelledby="spelling-title" hidden>
-          <h2 id="spelling-title">Возможно, вы имели в виду</h2>
-          <div class="card-actions"></div>
-        </section>
-        <p id="status" role="status"></p>
+        <div class="results-heading">
+          <p id="status" role="status"></p>
+          <label id="sort-control" hidden><span class="visually-hidden">Сортировка</span>
+            <select id="sort-results">
+              <option value="relevance">По релевантности</option>
+              <option value="price-asc">Сначала дешевле</option>
+              <option value="price-desc">Сначала дороже</option>
+            </select>
+          </label>
+        </div>
         <div id="filter-details" class="card-actions" hidden></div>
         <section id="results" class="cards" aria-label="Результаты поиска"></section>
         <div id="result-pagination" class="result-pagination" hidden>
@@ -117,7 +148,7 @@
         </div>
         <section id="alternatives" hidden><h2>Альтернативы</h2><div class="cards"></div></section>
         <section id="bundle" class="approval" hidden aria-labelledby="bundle-title">
-          <h2 id="bundle-title">Комплект для компании</h2>
+          <h2 id="bundle-title">Дополнения к выбранному товару</h2>
           <p id="bundle-message" role="status"></p>
           <div class="cards"></div>
         </section>

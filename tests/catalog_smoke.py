@@ -6,6 +6,9 @@ from urllib.request import Request, urlopen
 import json
 
 import psycopg
+from psycopg.rows import dict_row
+
+from app.search import load_category_coverage
 
 
 def get(path, headers=None, body=None):
@@ -25,6 +28,14 @@ with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
         SELECT id FROM offer JOIN active_catalog ON offer.snapshot_id = active_catalog.snapshot_id
         WHERE group_id = '391338' AND available ORDER BY id LIMIT 1
     """).fetchone()[0]
+
+with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row) as connection:
+    coverage = load_category_coverage(connection, get("/ready")["catalog_version"])
+    assert len(coverage) == 335
+    for category, rule in (("1145", "platform"), ("86563", "server"), ("70824", "usb"),
+                           ("75936", "socket"), ("85741", "optics"), ("93995", "printer")):
+        assert any(relation.check == rule for relation, _ in coverage[category]), category
+    assert not coverage["82833"]
 
 ready = get("/ready")
 for query in ("AnyDesk", "КриптоПро CSP 5.0", "антивирус для рабочих станций компании"):
@@ -89,6 +100,26 @@ assert "Kaspersky" in get("/suggest?" + urlencode({"q": typo}))["suggestions"]
 repaired = get("/search?" + urlencode({"q": typo}))
 assert repaired["corrected_query"] == "Kaspersky" and repaired["results"]
 assert all("касперского" in card["vendor"].casefold() for card in repaired["results"])
+for query, label in (("качпеоский", "Kaspersky"), ("криппопро tls", "КриптоПро tls"),
+                     ("Kaspresky VPN", "Kaspersky VPN"), ("Kaspresky впн", "Kaspersky VPN")):
+    params = urlencode({"q": query})
+    assert get("/suggest?" + params)["suggestions"][0].casefold() == label.casefold(), query
+    repaired = get("/search?" + params)
+    assert repaired["corrected_query"].casefold() == label.casefold() and repaired["results"], repaired
+for query, label in (("мимкосотф", "Microsoft"), ("адинэсс", "AnyDesk"), ("вмнвэар", "VMware"),
+                     ("криптограф", "КриптоПро"), ("логотека", "Logitech"), ("автодиски", "Autodesk")):
+    params = urlencode({"q": query})
+    repaired = get("/search?" + params)
+    assert repaired["corrected_query"] is None and label in repaired["spelling_suggestions"], repaired
+    assert get("/suggest?" + params)["suggestions"] == repaired["spelling_suggestions"], query
+    assert get("/search?" + urlencode({"q": label}))["results"], label
+for query in ("впн", "ВПН"):
+    params = urlencode({"q": query, "semantic": "false"})
+    result = get("/search?" + params)
+    assert result["corrected_query"] == "VPN" and result["results"], result
+    assert result["results"] == get("/search?q=VPN&semantic=false")["results"]
+    suggestions = get("/suggest?" + params)["suggestions"]
+    assert suggestions[0] == "VPN" and suggestions == get("/suggest?q=VPN")["suggestions"]
 typo_title = urlencode({"q": "Kaspresky Passwrod Manager"})
 assert "Kaspersky Password Manager" in get("/suggest?" + typo_title)["suggestions"]
 assert get("/search?" + typo_title)["corrected_query"] == "Kaspersky Password Manager"
@@ -107,6 +138,30 @@ assert office["results"][0]["offer_id"] == office_id, office
 assert len(office["recommendations"]) > 0, office
 assert len({item["family_id"] for item in office["top4"]}) == len(office["top4"]), office
 assert all(item["compatibility"]["matched_platforms"] for item in office["recommendations"]), office
+for offer_id, status in (("460304", "confirmed"), ("438239", "needs_confirmation"),
+                         ("124285", "needs_confirmation"), ("533065", "not_applicable")):
+    bundle_result = get("/bundle?" + urlencode({"offer_id": offer_id, "catalog_version": ready["catalog_version"]}))
+    assert bundle_result["status"] == status, bundle_result
+    if status == "confirmed":
+        assert all(item["category_id"] == "82833" and item["compatibility"]["evidence"]
+                   and item["compatibility"]["source_offer_id"] == offer_id for item in bundle_result["items"])
+    else:
+        assert not bundle_result["items"]
+
+replacement = get("/search?q=125344")
+assert replacement["results"][0]["offer_id"] == "125344" and not replacement["results"][0]["available"]
+assert len(replacement["alternatives"]) == 4
+assert replacement["top4"] == replacement["alternatives"]
+assert all(item["available"] and item["category_id"] == "70824" for item in replacement["alternatives"])
+assert not get("/search?q=413308")["alternatives"]
+patrol = get("/search?q=max+patrol")
+assert patrol["corrected_query"] == "MaxPatrol" and patrol["results"][0]["group_id"] == "437421"
+
+strict = get("/search?" + urlencode({"q": "защита для Windows 11, на 50 рабочих мест, без подписки"}))
+assert not strict["top4"] and "без подписки" in strict["filter_diagnostics"]["requirements_unmet"], strict
+assert not get("/search?" + urlencode({"q": "КриптоПро CSP 9.9"}))["top4"]
+astra = get("/search?q=Astra+Linux")["results"]
+assert astra and all(item["category_id"] == "222320" and item["name"].startswith("Astra Linux") for item in astra)
 print("Полный каталог, разные семейства и допродажи с совпадением платформы проверены")
 
 priced = next(card for card in office["top4"] if card["available"] and card["price"])

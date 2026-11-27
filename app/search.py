@@ -1,7 +1,11 @@
 import re
+from dataclasses import dataclass, field
 from html import unescape
 
-from app.procurement import CATALOG_FILTERS, catalog_match, filter_offers, purchase_values
+from app.brand_recovery import recover_brand
+from app.procurement import filter_offers
+from app.relations import alternative_difference, category_coverage, comparable_offer, compatibility_evidence
+from app.requirements import catalog_os, check_requirement, parse_requirements, unmet_requirements
 from app.spelling import clear_winner, rank_spellings
 
 NORMALIZATIONS = (
@@ -10,9 +14,16 @@ NORMALIZATIONS = (
     (re.compile(r"\bантивирь\b", re.IGNORECASE), "антивирус"),
     (re.compile(r"\bвинда\b", re.IGNORECASE), "Windows"),
 )
+SEARCH_ALIASES = (
+    (re.compile(r"\bвпн\b", re.I), "VPN"),
+    (re.compile(r"\bmax[ -]+patrol\b", re.I), "MaxPatrol"),
+)
 REMOTE_CATEGORIES = {"327029", "327030"}
 SERVER_CATEGORIES = {"86563", "87093", "87268", "87276"}
 SERVER_REQUEST = re.compile(r"(?:(?:купить|подобрать)\s+)?сервер(?:ы)?", re.IGNORECASE)
+ASTRA_PRODUCT = re.compile(r"(?:астра\s+линукс|astra\s+linux)(?:\s+(?:(?:common|special)\s+edition|ce|se))?", re.I)
+WINDOWS_PRODUCT = re.compile(r"windows(?:\s+(?:10|11|server(?:\s+20\d{2})?))?", re.I)
+OS_PRODUCT_PREFIX = r"^(?:(?:ос|операционная система|лицензия|microsoft)\s+)*"
 VERSION = re.compile(r"(?<![\w.])\d+(?:\.\d+)+(?![\w.])")
 KASPERSKY_NAMES = ("kaspersky", "касперский", "касперски")
 KASPERSKY_VENDOR_NAMES = {"лаборатория касперского", "kaspersky", "kaspersky lab"}
@@ -32,6 +43,8 @@ SUGGESTION_ALIASES = {
     "VMware": ("вмвар", "вмваре", "вмвэр"),
     "ESET": ("есет", "эсет"),
 }
+SPELLING_ALIASES = {**SUGGESTION_ALIASES, "КриптоПро": ("крипто про", "cryptopro")}
+SPELLING_BRANDS = sorted(SPELLING_ALIASES, key=len, reverse=True)
 BRAND_BY_NAME = {
     name: canonical
     for canonical, aliases in SUGGESTION_ALIASES.items()
@@ -189,24 +202,6 @@ SEMANTIC_OFFERS = """
     ORDER BY n.distance, o.available DESC, o.id
 """
 
-COMPLEMENT_CANDIDATES = """
-    SELECT id AS offer_id, vendor_code, group_id, category_id, name, vendor, url,
-        price, currency, available, attributes, left(description, 1200) AS description
-    FROM offer
-    WHERE snapshot_id = %(snapshot)s AND category_id = %(category)s
-      AND (description ILIKE '%%Платформа:%%' OR attributes ? 'Платформа'
-           OR attributes ? 'Совместимая архитектура/платформа')
-    ORDER BY (available AND price > 0) DESC NULLS LAST, available DESC, id
-    LIMIT 1200
-"""
-
-RECOMMENDATIONS = {
-    "1145": ("650", "Защита рабочих станций"),
-    "222323": ("650", "Защита рабочих станций"),
-    **dict.fromkeys(SERVER_CATEGORIES, ("1033", "Резервное копирование серверов")),
-}
-
-
 CATEGORY_CANDIDATES = """
     WITH cheapest AS (
         SELECT id, available, price, row_number() OVER (
@@ -231,6 +226,10 @@ def preferred_categories(query):
     if SERVER_REQUEST.fullmatch(query):
         return SERVER_CATEGORIES
     normalized = query.casefold().replace("ё", "е")
+    if ASTRA_PRODUCT.fullmatch(normalized):
+        return {"222320"}
+    if WINDOWS_PRODUCT.fullmatch(normalized):
+        return {"2050"}
     remote = re.search(r"удаленн\w* доступ|удаленн\w* рабоч\w* стол", normalized)
     away = re.search(r"из дома|командировк|из друг\w* город|удаленн", normalized)
     computer = re.search(r"компьютер|\bпк\b|рабоч\w* станци", normalized)
@@ -278,6 +277,17 @@ def preferred_categories(query):
     ):
         return {"4742"}
     return set()
+
+
+def matches_platform_product(item, intent):
+    if item["exact"]:
+        return True
+    requested = normal_form(intent)
+    if ASTRA_PRODUCT.fullmatch(requested):
+        return bool(re.match(OS_PRODUCT_PREFIX + r"(?:astra linux|астра линукс)\b", normal_form(item["name"])))
+    if WINDOWS_PRODUCT.fullmatch(requested):
+        return bool(re.match(OS_PRODUCT_PREFIX + re.escape(requested) + r"\b", normal_form(item["name"])))
+    return True
 
 
 def normalize_query(query):
@@ -378,87 +388,79 @@ def select_families(candidates):
     return sorted(chosen.values(), key=lambda item: (item["exact"], is_priced(item)), reverse=True)
 
 
-def platform_labels(value):
-    labels = re.findall(
-        r"windows(?:\s+server(?:\s+20\d{2})?|\s+(?:10|11))?|"
-        r"astra linux|alt linux|ubuntu|debian|centos|red hat enterprise linux|"
-        r"linux|(?:apple )?mac ?os(?: x)?|android|ios|freebsd|vmware esxi",
-        normal_form(value),
-    )
-    return {re.sub(r"^(?:apple )?mac ?os(?: x)?$", "macos", label) for label in labels}
-
-
-def platform_values(card):
-    fields = ("Платформа", "Совместимая архитектура/платформа", "Поддерживаемые ОС")
-    labels = set()
-    for field in fields:
-        labels.update(platform_labels(card["attributes"].get(field) or ""))
-    return labels
-
-
 def buyer_type(card):
     value = normal_form(card["attributes"].get("Тип клиента") or "")
     return value if value in {"физлицо", "юрлицо"} else None
 
 
-def compatibility(anchor, offer, query, category, platform=None):
-    license_type = offer["attributes"].get("Тип лицензии") or ""
-    if re.search(r"продлен|обновлен|renewal|upgrade", normal_form(offer["name"] + " " + license_type)):
-        return None
-    required = platform_labels(query) or platform_values(anchor)
-    if platform:
-        shared = {platform.replace("-", " ")} if platform in purchase_values(offer["attributes"])["platform"] else set()
-    else:
-        shared = required & platform_values(offer)
-    if anchor["category_id"] in SERVER_CATEGORIES:
-        shared = {label for label in shared if label.startswith("windows server")
-                  or label in {"astra linux", "alt linux", "ubuntu", "debian", "centos",
-                               "red hat enterprise linux", "linux", "freebsd", "vmware esxi"}}
-    elif category == "650" and not re.search(
+def workstation_security(offer):
+    return re.search(
         r"endpoint|workstation|desktop|для (?:рабочих станций|компьютеров|офиса)|small office",
         offer["name"], re.IGNORECASE,
-    ):
-        return None
-    source_buyer, target_buyer = buyer_type(anchor), buyer_type(offer)
-    if not shared or (source_buyer and target_buyer and source_buyer != target_buyer):
-        return None
-    return {
-        "matched_platforms": sorted(shared),
-        "source_offer_id": anchor["offer_id"],
-        "buyer_type_checked": bool(source_buyer and target_buyer),
-    }
+    )
 
 
-def fill_recommendations(connection, snapshot, query, results, platform=None, catalog_filters=None):
-    if not results or len(results) >= 4:
-        return []
-    anchor = results[0]
-    rule = RECOMMENDATIONS.get(anchor["category_id"])
-    if not rule or not (platform or platform_labels(query) or platform_values(anchor)):
-        return []
-    target, reason = rule
-    taken = {card["family_id"] for card in results}
-    rows = connection.execute(COMPLEMENT_CANDIDATES, {
-        "snapshot": snapshot, "category": target,
-    })
-    recommendations = []
-    for row in rows:
-        if any(not catalog_match(row, key, value) for key, value in (catalog_filters or {}).items()):
+def load_category_coverage(connection, snapshot):
+    categories = {row["id"]: (row["name"], row["parent_id"]) for row in connection.execute(
+        "SELECT id, name, parent_id FROM category WHERE snapshot_id = %s", (snapshot,),
+    )}
+    used = {row["category_id"] for row in connection.execute(
+        "SELECT DISTINCT category_id FROM offer WHERE snapshot_id = %s AND category_id IS NOT NULL", (snapshot,),
+    )}
+    return category_coverage(categories, used)
+
+
+def recommend_for_anchor(connection, snapshot, anchor, coverage, requirements=(), limit=3, taken=()):
+    relations = coverage.get(anchor["category_id"], ())
+    if not relations:
+        return [], "not_applicable"
+    # Версия и редакция основного продукта не задают номер версии самостоятельного дополнения.
+    applicable = [requirement for requirement in requirements if requirement.key not in {"edition", "version", "term"}]
+    explicit_os = [label for requirement in applicable if requirement.mandatory and requirement.key in {"os", "os_any"}
+                   for label in ((requirement.value,) if requirement.key == "os" else requirement.value)]
+    unique = {anchor["family_id"], *taken}
+    pools = []
+    for relation, targets in relations:
+        needs_platform = relation.check in {"platform", "server"}
+        if needs_platform and not (explicit_os or catalog_os(anchor, anchor["attributes"])):
             continue
-        card = as_card(row, reason)
-        if card["family_id"] in taken:
-            continue
-        proof = compatibility(anchor, card, query, target, platform)
-        if proof is None:
-            continue
-        card["reason"] = reason + ". Совпадение платформы: " + ", ".join(proof["matched_platforms"])
-        card["compatibility"] = proof
-        card["match_type"] = "recommendation"
-        recommendations.append(card)
-        taken.add(card["family_id"])
-        if len(results) + len(recommendations) == 4:
+        rows = connection.execute("""
+            SELECT id AS offer_id, vendor_code, group_id, category_id, name, vendor, url,
+                   price, currency, available, attributes, left(description, 1200) AS description
+            FROM offer WHERE snapshot_id = %s AND available AND category_id = ANY(%s)
+              AND (NOT %s OR attributes ?| ARRAY['Платформа', 'Совместимая архитектура/платформа', 'Поддерживаемые ОС']
+                   OR description LIKE '%%Платформа:%%')
+            ORDER BY (price > 0) DESC NULLS LAST, id LIMIT 1200
+        """, (snapshot, list(targets), needs_platform))
+        relation_items = []
+        for row in rows:
+            card = as_card(row, "")
+            if card["family_id"] in unique or unmet_requirements(row, card["attributes"], applicable):
+                continue
+            if row["category_id"] == "650" and not workstation_security(row):
+                continue
+            license_text = normal_form(row["name"] + " " + (card["attributes"].get("Тип лицензии") or ""))
+            if re.search(r"продлен|обновлен|renewal|upgrade", license_text):
+                continue
+            left, right = buyer_type(anchor), buyer_type(card)
+            if left and right and left != right:
+                continue
+            proof = compatibility_evidence(anchor, card, relation.check, explicit_os)
+            if not proof:
+                continue
+            card.update(reason=relation.label + ". " + ". ".join(proof["evidence"]),
+                        compatibility={**proof, "source_offer_id": anchor["offer_id"]},
+                        match_type="recommendation")
+            relation_items.append(card)
+            unique.add(card["family_id"])
+            if len(relation_items) == limit:
+                break
+        if relation_items:
+            pools.append(relation_items)
+        if len(pools) == limit:
             break
-    return recommendations
+    items = [pool[index] for index in range(limit) for pool in pools if len(pool) > index][:limit]
+    return items, "confirmed" if items else "needs_confirmation"
 
 
 def purchase_family_offers(connection, snapshot, matching, query, versions):
@@ -481,40 +483,99 @@ def purchase_family_offers(connection, snapshot, matching, query, versions):
     return sorted(seen.values(), key=lambda item: positions[family_key(item)])
 
 
-def assemble_results(connection, snapshot, query, lexical, semantic, filters=None, diagnostics=None, *, expanded=False):
+def assemble_results(connection, snapshot, query, lexical, semantic, filters=None, diagnostics=None, *,
+                     expanded=False, coverage=None, intent_query=None):
     versions = set(VERSION.findall(query))
     # Длинные формулировки чаще описывают задачу. Версия и артикул сохраняют приоритет.
     natural_language = len(query.split()) >= 5 and not versions
     merged = merge_candidates(lexical, semantic, 0.65 if natural_language else 1.3)
-    categories = preferred_categories(query)
-    matching = [item for item in merged if matches_product_variant(item, query, versions)]
+    categories = preferred_categories(intent_query or query)
+    requirements = parse_requirements(query, filters)
+    matching = [item for item in merged if matches_product_variant(item, query, versions)
+                and matches_platform_product(item, intent_query or query)]
     if categories:
         preferred = [item for item in matching if item["exact"] or item["category_id"] in categories]
         if preferred:
             matching = preferred
-    if filters:
-        matching = purchase_family_offers(connection, snapshot, matching, query, versions)
-        matching, counts = filter_offers(matching, filters, family_key, card_attributes)
+    if filters or requirements:
+        matching = [item for item in purchase_family_offers(connection, snapshot, matching, query, versions)
+                    if matches_platform_product(item, intent_query or query)]
+        matching, counts = filter_offers(matching, filters or {}, family_key, card_attributes)
+        unmatched = {requirement.label for requirement in requirements if requirement.mandatory} if not matching else set()
+        eligible = []
+        for item in matching:
+            failures = unmet_requirements(item, card_attributes(item), requirements)
+            if failures:
+                unmatched.update(requirement.label for requirement, _ in failures)
+            else:
+                eligible.append(item)
+        matching = eligible
         if diagnostics is not None:
             diagnostics.update(counts)
+            diagnostics["requirements_unmet"] = sorted(unmatched)
+            diagnostics["families_after"] = len({family_key(item) for item in matching})
     elif diagnostics is not None:
         count = len({family_key(item) for item in matching})
         diagnostics.update(families_before=count, families_after=count, conditions={})
     lexical_ids = {item["offer_id"] for item in lexical}
     ranked = select_families(matching)
+    preferences = [requirement for requirement in requirements if not requirement.mandatory]
+    if preferences:
+        ranked.sort(key=lambda item: (item["exact"], sum(
+            check_requirement(item, card_attributes(item), requirement) is True for requirement in preferences
+        )), reverse=True)
     results = [as_card(item, "Совпадение артикула или ID" if item["exact"] else (
         "Совпадение по каталогу" if item["offer_id"] in lexical_ids else "Похожее назначение продукта"
     )) for item in (ranked if expanded else ranked[:4])]
     for card in results:
         card["match_type"] = "direct"
-        card["bundle_available"] = (
-            card["category_id"] in RECOMMENDATIONS and bool(platform_values(card))
-        )
-    catalog_filters = {key: filters[key] for key in CATALOG_FILTERS if filters and key in filters}
-    recommendations = fill_recommendations(
-        connection, snapshot, query, results, (filters or {}).get("platform"), catalog_filters,
+        card["bundle_available"] = card["available"] and bool((coverage or {}).get(card["category_id"]))
+    alternatives = find_alternatives(
+        connection, snapshot, results, lexical, semantic, categories, requirements, intent_query or query,
     )
-    return results, [], recommendations
+    # В top4 оставляем дополнения на свободных местах. Подбор по выбранному товару независим от размера выдачи.
+    free = 4 - len(results) - len(alternatives)
+    recommendations = []
+    if coverage and results and free > 0 and results[0]["available"]:
+        recommendations, _ = recommend_for_anchor(
+            connection, snapshot, results[0], coverage, requirements, free,
+            (card["family_id"] for card in (*results, *alternatives)),
+        )
+    return results, alternatives, recommendations
+
+
+def find_alternatives(connection, snapshot, results, lexical, semantic, categories, requirements, intent):
+    if any(card["available"] for card in results):
+        return []
+    exact = next((item for item in lexical if item["exact"]), None)
+    unavailable = next((row for row in lexical if results and row["offer_id"] == results[0]["offer_id"]), None)
+    reference = exact or unavailable
+    if reference and reference["category_id"]:
+        categories = {reference["category_id"]}
+    if not categories:
+        return []
+    candidates = [item for item in semantic if item["category_id"] in categories]
+    candidates.extend(connection.execute(CATEGORY_CANDIDATES, {"snapshot": snapshot, "categories": sorted(categories)}))
+    taken = {card["family_id"] for card in results}
+    anchor = as_card(reference, "") if reference else None
+    if anchor:
+        taken.add(anchor["family_id"])
+    output = []
+    for item in candidates:
+        family = family_key(item)
+        if not item["available"] or family in taken or not matches_platform_product(item, intent):
+            continue
+        card = as_card(item, "")
+        if unmet_requirements(item, card["attributes"], requirements) or (anchor and not comparable_offer(anchor, card)):
+            continue
+        reason = "То же назначение по категории каталога"
+        if anchor and (difference := alternative_difference(anchor, card)):
+            reason += ". " + unescape(difference)
+        output.append({**card, "reason": reason, "match_type": "alternative", "bundle_available": False})
+        taken.add(family)
+        if len(output) == 4:
+            break
+    return output
 
 
 SUGGEST_FAMILIES = """
@@ -567,13 +628,10 @@ SPELLING_OFFERS = """
 """
 
 
-def spelling_options(connection, snapshot, query):
-    if not 4 <= len(query) <= 64 or len(query.split()) > 6 or catalog_identifier(query):
-        return []
+def catalog_spelling_options(connection, snapshot, query):
     tokens = query.split()
-    aliases = {**SUGGESTION_ALIASES, "КриптоПро": ("крипто про", "cryptopro")}
     brand_candidates = []
-    for brand, names in aliases.items():
+    for brand, names in SPELLING_ALIASES.items():
         for name in (brand, *names):
             length = len(name.split())
             suffix = " ".join(tokens[length:])
@@ -627,7 +685,14 @@ def known_brand(query):
     return None
 
 
+def normalize_search_aliases(query):
+    for pattern, replacement in SEARCH_ALIASES:
+        query = pattern.sub(replacement, query)
+    return query
+
+
 def resolve_search_input(query):
+    query = normalize_search_aliases(query)
     brand = known_brand(query)
     if brand:
         return brand
@@ -655,4 +720,66 @@ def suggest_families(connection, snapshot, query):
     suggestions = [unescape(row["name"]) for row in rows]
     if canonical == "Kaspersky" and suggestions:
         return ["Kaspersky", *[item for item in suggestions if item.casefold() != "kaspersky"][:5]]
+    if lookup.casefold() == "vpn" and suggestions:
+        return ["VPN", *[item for item in suggestions if item.casefold() != "vpn"][:5]]
     return suggestions
+
+
+@dataclass
+class QueryResolution:
+    lookup: str
+    lexical: list
+    choices: list[str] = field(default_factory=list)
+
+
+def spelling_matches(connection, snapshot, label):
+    rows = lexical_candidates(connection, snapshot, label, allow_fuzzy=False)
+    key = normal_form(label)
+    brand = next((name for name in SPELLING_BRANDS
+                  if key == name.casefold() or key.startswith(name.casefold() + " ")), None)
+    if not brand:
+        return rows
+    if brand == "Kaspersky":
+        return [row for row in rows if normal_form(row["vendor"] or "").strip("«»\" ") in KASPERSKY_VENDOR_NAMES]
+    aliases = (brand, *SPELLING_ALIASES[brand])
+    if brand == "Astra Linux":
+        aliases += ("астра",)
+    vendor_brand = re.compile(r"(?<!\w)(?:" + "|".join(re.escape(normal_form(alias)) for alias in aliases) + r")(?!\w)")
+    return [row for row in rows if vendor_brand.search(normal_form(row["vendor"] or ""))]
+
+
+def resolve_catalog_query(connection, snapshot, query, *, prefixes=None):
+    lookup = resolve_search_input(query)
+    lexical = lexical_candidates(connection, snapshot, lookup, allow_fuzzy=False)
+    if lexical or lookup.casefold() != normalize_search_aliases(query).casefold() or catalog_identifier(query):
+        return QueryResolution(lookup, lexical)
+
+    query = lookup
+    if not 4 <= len(query) <= 64 or len(query.split()) > 6:
+        return QueryResolution(lookup, lexical)
+
+    if prefixes is None:
+        prefixes = suggest_families(connection, snapshot, query)
+    completions = [name for name in prefixes if name.casefold().startswith(query.casefold())]
+    if completions:
+        ranked = [(0, name) for name in completions]
+        model_label = None
+    else:
+        ranked = catalog_spelling_options(connection, snapshot, query)
+        leading, separator, suffix = query.partition(" ")
+        brand = recover_brand(leading)
+        model_label = brand + separator + suffix if brand else None
+
+    confirmed = [(score, label, rows) for score, label in ranked
+                 if (rows := spelling_matches(connection, snapshot, label))]
+    choices = [label for _, label, _ in confirmed]
+    if (model_label and model_label.casefold() not in {label.casefold() for label in choices}
+            and spelling_matches(connection, snapshot, model_label)):
+        choices.insert(0, model_label)
+
+    # Модель может добавить вариант. Автозамена требует близкого подтверждённого совпадения.
+    if (confirmed and choices[0] == confirmed[0][1] and confirmed[0][0] <= 20
+            and clear_winner([(score, label) for score, label, _ in confirmed])):
+        _, corrected, rows = confirmed[0]
+        return QueryResolution(corrected, rows)
+    return QueryResolution(lookup, lexical, choices[:6])

@@ -101,6 +101,7 @@ function isBusinessView() {
 function updateView({focus = false, initial = false} = {}) {
   const business = isBusinessView();
   document.body.dataset.view = business ? "business" : "search";
+  document.querySelector(".license-filters").open = business;
   pageTitle.textContent = business ? "Закупки для бизнеса" : "Поиск по каталогу Softline";
   document.title = "Waive | " + pageTitle.textContent;
   businessProfile.hidden = businessApproval.hidden = backToSearch.hidden = !business;
@@ -188,9 +189,6 @@ function addProcurementActions(actions, item, context) {
     toggleApproval({item, count: workplaces.value, anchor: context.anchor});
   });
   updateApprovalButton(button);
-  if (!context.anchor && item.bundle_available) {
-    filterButton(group, "Подобрать комплект", () => loadBundle(item, context));
-  }
 }
 
 function clearBundle() {
@@ -208,14 +206,20 @@ async function loadBundle(anchor, context) {
   bundle.scrollIntoView({block: "nearest"});
   const params = new URLSearchParams({offer_id: anchor.offer_id, catalog_version: context.version});
   if (context.platform) params.set("platform", context.platform);
+  if (context.query) params.set("q", context.query);
+  if (isBusinessView() && workplaces.value && workplaces.checkValidity()) params.set("seats", workplaces.value);
   try {
     const response = await fetch("/bundle?" + params, {signal: controller.signal});
     const data = await response.json();
     if (controller.signal.aborted) return;
     if (!response.ok) throw new Error(data.detail);
     bundleMessage.textContent = data.items.length
-      ? "Основная позиция — " + anchor.name + ". Для дополнений проверена совместимость по платформе."
-      : "Проверенные дополнения к «" + anchor.name + "» не найдены.";
+      ? "Дополнения к «" + anchor.name + "». Основания для подбора указаны на карточках."
+      : data.status === "not_applicable"
+        ? "Для этой категории дополнения не предусмотрены."
+        : data.status === "anchor_unavailable"
+          ? "Товар сейчас недоступен. Выберите доступную позицию для подбора дополнений."
+        : "Проверенных дополнений к «" + anchor.name + "» нет. Для подбора нужны подтверждённые характеристики.";
     if (!data.items.length) return;
     const cards = [
       productCard({...data.anchor, bundle_available: false}, undefined, context),

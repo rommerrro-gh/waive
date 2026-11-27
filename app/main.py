@@ -3,6 +3,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from threading import BoundedSemaphore
 from contextlib import asynccontextmanager
+from html import unescape
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -16,14 +17,15 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool, PoolTimeout
 
 from app.analytics import configured, record_search, router
+from app.brand_recovery import load_model
 from app.procurement import LICENSE_TYPES, PLATFORMS, purchase_values, requested_filters
 from app.quote import router as quote_router
+from app.requirements import parse_requirements, retrieval_query
 from app.embeddings import vector_literal, vectors
 from app.search import (
-    BRAND_BY_NAME, SEMANTIC_OFFERS, as_card, assemble_results, catalog_identifier, fill_recommendations,
-    is_kaspersky_query, lexical_candidates, resolve_search_input, spelling_options, suggest_families,
+    BRAND_BY_NAME, SEMANTIC_OFFERS, as_card, assemble_results, catalog_identifier, load_category_coverage,
+    is_kaspersky_query, recommend_for_anchor, resolve_catalog_query, suggest_families,
 )
-from app.spelling import clear_winner
 
 logger = logging.getLogger(__name__)
 inference_slots = BoundedSemaphore(4)
@@ -56,6 +58,7 @@ def semantic_candidates(connection, future, snapshot, revision):
 
 @asynccontextmanager
 async def lifespan(app):
+    load_model()
     with ConnectionPool(
         os.environ["DATABASE_URL"], min_size=0, max_size=8, timeout=2,
         kwargs={"row_factory": dict_row, "autocommit": True, "options": "-c statement_timeout=1800"},
@@ -63,12 +66,22 @@ async def lifespan(app):
     ) as pool, ThreadPoolExecutor(max_workers=4) as executor:
         app.state.pool = pool
         app.state.executor = executor
+        app.state.coverage = {}
         yield
 
 
 app = FastAPI(title="Waive", lifespan=lifespan)
 app.include_router(router)
 app.include_router(quote_router)
+
+
+def snapshot_coverage(connection, snapshot):
+    cached = app.state.coverage.get(snapshot)
+    if cached is not None:
+        return cached
+    calculated = load_category_coverage(connection, snapshot)
+    app.state.coverage = {snapshot: calculated}
+    return calculated
 
 
 @app.get("/health")
@@ -99,8 +112,14 @@ def suggest(q: Annotated[str, Query(max_length=120)]):
             items = suggest_families(connection, active["snapshot_id"], query) if active else []
             if active and not items:
                 snapshot = active["snapshot_id"]
-                options = spelling_options(connection, snapshot, query)
-                items = [label for _, label in options if suggest_families(connection, snapshot, label)]
+                decision = resolve_catalog_query(connection, snapshot, query, prefixes=items)
+                items = decision.choices
+                if decision.lexical:
+                    if decision.lookup.casefold() != query.casefold() or decision.lookup.casefold() in BRAND_BY_NAME:
+                        items = [decision.lookup, *suggest_families(connection, snapshot, decision.lookup)]
+                    else:
+                        items = [unescape(row["name"]) for row in decision.lexical if row["available"]]
+            items = list(dict.fromkeys(items))[:6]
     except (OperationalError, PoolTimeout, QueryCanceled) as error:
         raise HTTPException(503, "Подсказки временно недоступны") from error
     return {"suggestions": items}
@@ -131,8 +150,6 @@ def find_products(
         "in_stock": in_stock or None, "price_min": price_min, "price_max": price_max,
     }.items() if value is not None}
     diagnostics = {}
-    lookup = resolve_search_input(query)
-    spellings = []
     request_id = uuid4()
     track = track and configured()
     try:
@@ -141,54 +158,65 @@ def find_products(
             if not active:
                 raise HTTPException(503, "Каталог готовится")
             snapshot = active["snapshot_id"]
-            lexical = lexical_candidates(connection, snapshot, lookup, allow_fuzzy=False)
-            if not lexical and lookup.casefold() == query.casefold():
-                prefix = query.casefold()
-                completions = [name for name in suggest_families(connection, snapshot, query)
-                               if len(prefix) >= 4 and name.casefold().startswith(prefix)]
-                ranked = [(0, name) for name in completions] or spelling_options(connection, snapshot, query)
-                confirmed = [
-                    (score, label, candidates)
-                    for score, label in ranked
-                    if (candidates := lexical_candidates(connection, snapshot, label, allow_fuzzy=False))
-                ]
-                if clear_winner([(score, label) for score, label, _ in confirmed]):
-                    _, lookup, lexical = confirmed[0]
-                else:
-                    spellings = [label for _, label, _ in confirmed]
+            decision = resolve_catalog_query(connection, snapshot, query)
+            lookup, lexical, spellings = decision.lookup, decision.lexical, decision.choices
+            intent = retrieval_query(lookup) if parse_requirements(lookup) else lookup
+            if intent != lookup and not spellings and not any(item["exact"] for item in lexical):
+                narrowed = resolve_catalog_query(connection, snapshot, intent)
+                existing = {item["offer_id"] for item in lexical}
+                lexical.extend(item for item in narrowed.lexical if item["offer_id"] not in existing)
+                if not lexical:
+                    spellings = narrowed.choices
+                if narrowed.lookup != intent and lookup.casefold().startswith(intent.casefold()):
+                    lookup = narrowed.lookup + lookup[len(intent):]
+                intent = narrowed.lookup
             corrected = lookup.casefold() != query.casefold()
             brand_only = is_kaspersky_query(lookup) or (corrected and lookup.casefold() in BRAND_BY_NAME)
             revision = os.environ.get("MODEL_REVISION")
             indexed = None
             allow_semantic = not spellings and (lexical or len(query.split()) >= 3)
-            if semantic and allow_semantic and not brand_only and not catalog_identifier(query) and revision and os.environ.get("EMBEDDING_URL"):
+            if (semantic and allow_semantic and not brand_only and not catalog_identifier(query)
+                    and not any(item["exact"] for item in lexical) and revision and os.environ.get("EMBEDDING_URL")):
                 indexed = connection.execute("""
                     SELECT 1 FROM semantic_catalog WHERE snapshot_id = %s AND model_revision = %s
                 """, (snapshot, revision)).fetchone()
-            future = request_vector(app.state.executor, lookup) if indexed else None
+            future = request_vector(app.state.executor, intent) if indexed else None
             semantic_rows, used_model = semantic_candidates(connection, future, snapshot, revision)
             items, alternatives, recommendations = assemble_results(
-                connection, snapshot, lookup, lexical, semantic_rows, filters, diagnostics, expanded=expanded,
+                connection, snapshot, lookup, lexical, semantic_rows, filters, diagnostics,
+                expanded=expanded, coverage=snapshot_coverage(connection, snapshot), intent_query=intent,
             )
+            category_ids = sorted({item["category_id"] for item in items if item["category_id"]})
+            result_categories = connection.execute("""
+                SELECT id, name FROM category
+                WHERE snapshot_id = %s AND id = ANY(%s)
+                ORDER BY name, id
+            """, (snapshot, category_ids)).fetchall() if category_ids else []
             if track:
                 track = record_search(
                     connection, request_id, query, filters, diagnostics, items, recommendations, demo, with_profile,
                 )
     except (OperationalError, PoolTimeout, QueryCanceled) as error:
         raise HTTPException(503, "Поиск временно недоступен") from error
+    available_items = [item for item in items if item["available"]] if alternatives else items
+    unavailable_items = [item for item in items if not item["available"]] if alternatives else []
     return {
         "results": items,
-        "top4": items[:4] + recommendations,
+        "result_categories": result_categories,
+        "top4": (available_items + alternatives + recommendations + unavailable_items)[:4],
         "alternatives": alternatives,
         "recommendations": recommendations,
         "applied_filters": filters,
         "suggested_filters": requested_filters(query),
         "corrected_query": lookup if corrected else None,
         "spelling_suggestions": spellings,
-        "filter_diagnostics": diagnostics if filters else None,
+        "filter_diagnostics": diagnostics if filters or diagnostics.get("requirements_unmet") else None,
         "tracked": track,
         "clarification": (
-            "По выбранным условиям подходящие предложения не подтверждены" if filters and not items else
+            "Точного товара нет в наличии. Найдены альтернативы" if alternatives and not any(item["available"] for item in items) else
+            "Точный артикул не найден" if catalog_identifier(query) and not items else
+            "Товар найден, но сейчас недоступен. Подтверждённых аналогов нет" if items and not any(item["available"] for item in items) else
+            "По заданным условиям подходящие предложения не подтверждены" if (filters or diagnostics.get("requirements_unmet")) and not items else
             "Уточните название, бренд или артикул" if not items else
             "Найдено меньше четырёх подходящих семейств" if len(items) + len(recommendations) < 4 else None
         ),
@@ -203,6 +231,8 @@ def company_bundle(
     offer_id: Annotated[str, Query(min_length=1, max_length=100)],
     catalog_version: Annotated[int, Query(gt=0)],
     platform: Literal[*PLATFORMS] | None = None,
+    q: Annotated[str, Query(max_length=200)] = "",
+    seats: Annotated[int | None, Query(ge=1, le=1_000_000)] = None,
 ):
     try:
         with app.state.pool.connection() as connection, connection.transaction():
@@ -217,11 +247,17 @@ def company_bundle(
             if not row:
                 raise HTTPException(404, "Предложение не найдено")
             anchor = as_card(row, "Основная позиция")
+            if not anchor["available"]:
+                return {"anchor": anchor, "items": [], "status": "anchor_unavailable"}
             if platform and platform not in purchase_values(anchor["attributes"])["platform"]:
                 raise HTTPException(422, "Платформа основной позиции не подтверждена")
-            return {"anchor": anchor, "items": fill_recommendations(
-                connection, catalog_version, "", [anchor], platform
-            )}
+            if seats:
+                q += f", на {seats} рабочих мест"
+            requirements = parse_requirements(q, {"platform": platform} if platform else None)
+            items, status = recommend_for_anchor(
+                connection, catalog_version, anchor, snapshot_coverage(connection, catalog_version), requirements,
+            )
+            return {"anchor": anchor, "items": items, "status": status}
     except (OperationalError, PoolTimeout, QueryCanceled) as error:
         raise HTTPException(503, "Подбор комплекта временно недоступен") from error
 

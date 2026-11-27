@@ -11,14 +11,19 @@ const pageSize = 12;
 const query = document.querySelector("#query");
 const suggestions = document.querySelector("#suggestions");
 const comparisonBar = document.querySelector("#comparison-bar");
+const comparisonToggle = document.querySelector("#toggle-comparison");
 const comparisonItems = document.querySelector("#comparison-items");
 const openComparison = document.querySelector("#open-comparison");
 const comparison = document.querySelector("#comparison");
 const filterPanel = document.querySelector("#search-filters");
 const filterCount = document.querySelector("#active-filters");
+const categoryFilters = document.querySelector("#category-filters");
+const categoryOptions = document.querySelector("#category-options");
+const sortControl = document.querySelector("#sort-control");
+const sortResults = document.querySelector("#sort-results");
 const demoMode = new URLSearchParams(location.search).get("demo") === "true";
 const selected = new Map();
-const comparisonLimit = 3;
+const comparisonLimit = 4;
 let activeSearch;
 let resultSet;
 let activeSuggestion;
@@ -81,6 +86,13 @@ function productIcon(item) {
   return "shield-check";
 }
 
+function catalogArt(item) {
+  if (/cloud|облачн|виртуальн/i.test(item.name)) return "cloud";
+  if (/сервер|хранения данных|\bserver\b|rack/i.test(item.name)) return "server";
+  if (/аналитик|analyst|threat intelligence/i.test(item.name)) return "analyst";
+  return "package";
+}
+
 function productCard(item, requestId, context) {
   const card = document.createElement("article");
   card.className = "product-card";
@@ -88,13 +100,15 @@ function productCard(item, requestId, context) {
   body.className = "product-body";
   const icon = document.createElement("img");
   const symbol = productIcon(item);
-  icon.src = "/icons/" + symbol + ".svg";
+  icon.src = isBusinessView() ? "/icons/" + symbol + ".svg" : "/catalog-art/" + catalogArt(item) + ".webp";
   icon.alt = "";
+  icon.loading = "lazy";
   icon.width = icon.height = 22;
   const tile = addText(body, "span", "");
   tile.className = "product-icon " + symbol;
   tile.append(icon);
   const copy = addText(body, "div", "");
+  if (item.vendor) addText(copy, "p", item.vendor).className = "product-vendor";
   addText(copy, "h2", item.name);
   if (item.reason) addText(copy, "p", item.reason).className = "product-reason";
   const facts = addText(copy, "ul", "");
@@ -104,12 +118,14 @@ function productCard(item, requestId, context) {
     if (value) addText(facts, "li", key + " · " + value);
   }
   facts.hidden = !facts.children.length;
-  const availability = addText(card, "p", availabilityLabel(item));
-  availability.className = "product-availability";
-  availability.dataset.available = String(item.available);
   const footer = addText(card, "div", "");
   footer.className = "product-footer";
-  addText(footer, "strong", priceLabel(item));
+  const offer = addText(footer, "div", "");
+  offer.className = "product-offer";
+  addText(offer, "strong", priceLabel(item));
+  const availability = addText(offer, "p", availabilityLabel(item));
+  availability.className = "product-availability";
+  availability.dataset.available = String(item.available);
   const actions = addText(footer, "div", "");
   actions.className = "card-actions";
   const button = addText(actions, "button", "");
@@ -123,6 +139,10 @@ function productCard(item, requestId, context) {
   });
   renderCompareButton(button);
   addProductLink(actions, item, requestId, "В каталог");
+  if (context && !context.anchor && item.bundle_available) {
+    filterButton(footer, isBusinessView() ? "Подобрать комплект" : "Подобрать дополнения", () => loadBundle(item, context));
+    footer.lastElementChild.classList.add("bundle-toggle");
+  }
   if (context) addProcurementActions(actions, item, context);
   return card;
 }
@@ -135,9 +155,16 @@ function renderCompareButton(button) {
 }
 
 function syncComparison() {
-  comparisonBar.hidden = selected.size === 0;
+  if (!selected.size) {
+    if (comparisonBar.contains(document.activeElement)) query.focus();
+    showComparisonBar(false);
+  }
+  comparisonToggle.hidden = !selected.size;
+  comparisonToggle.querySelector("span").textContent = "Сравнение (" + selected.size + " из " + comparisonLimit + ")";
   openComparison.disabled = selected.size < 2;
-  document.querySelector("#comparison-count").textContent = "Выбрано " + selected.size + " из " + comparisonLimit;
+  const summary = "Выбрано " + selected.size + " из " + comparisonLimit;
+  document.querySelector("#comparison-count").textContent = summary;
+  document.querySelector("#comparison-announcement").textContent = summary;
   comparisonItems.replaceChildren();
   for (const [id, item] of selected) {
     const entry = addText(comparisonItems, "div", "");
@@ -150,10 +177,32 @@ function syncComparison() {
     remove.addEventListener("click", () => {
       selected.delete(id);
       syncComparison();
+      if (selected.size) comparisonBar.focus();
+      else query.focus();
     });
   }
   document.querySelectorAll(".compare-toggle").forEach(renderCompareButton);
 }
+
+function showComparisonBar(open) {
+  comparisonBar.hidden = !open;
+  comparisonToggle.setAttribute("aria-expanded", String(open));
+}
+
+comparisonToggle.addEventListener("click", () => {
+  showComparisonBar(comparisonBar.hidden);
+  if (!comparisonBar.hidden) comparisonBar.focus();
+});
+document.addEventListener("click", event => {
+  const path = event.composedPath();
+  if (!path.includes(comparisonBar) && !path.includes(comparisonToggle)) showComparisonBar(false);
+});
+comparisonBar.addEventListener("keydown", event => {
+  if (event.key !== "Escape") return;
+  showComparisonBar(false);
+  comparisonToggle.focus();
+});
+comparison.addEventListener("close", () => comparisonToggle.focus());
 
 openComparison.addEventListener("click", () => {
   if (selected.size < 2) return;
@@ -187,6 +236,7 @@ openComparison.addEventListener("click", () => {
     for (const value of values) addText(row, "td", value ?? "Нет данных в каталоге");
   }
   content.append(table);
+  showComparisonBar(false);
   comparison.showModal();
 });
 
@@ -216,6 +266,16 @@ function showFilters(data) {
   }
   filterSuggestions.hidden = !filterSuggestions.children.length;
   if (!data.filter_diagnostics || data.results.length >= 4) return;
+  if (data.filter_diagnostics.requirements_unmet?.length) {
+    addText(filterDetails, "p", "У части предложений не подтверждены условия: " +
+      data.filter_diagnostics.requirements_unmet.join(", ") + ".");
+    if (!data.results.length && !data.alternatives.length) {
+      filterButton(filterDetails, "Изменить запрос", () => {
+        query.focus();
+        query.select();
+      });
+    }
+  }
   const entries = Object.entries(data.filter_diagnostics.conditions)
     .filter(([, counts]) => counts.would_restore > 0);
   for (const [key, counts] of entries) {
@@ -299,11 +359,14 @@ query.addEventListener("keydown", event => {
     closeSuggestions();
     return;
   }
-  if (suggestions.hidden) return;
-  if (event.key === "Enter" && activeOption >= 0) {
+  if (event.key === "Enter") {
     event.preventDefault();
-    acceptSuggestion(suggestions.children[activeOption].textContent);
-  } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    if (activeOption >= 0) acceptSuggestion(suggestions.children[activeOption].textContent);
+    else form.requestSubmit();
+    return;
+  }
+  if (suggestions.hidden) return;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
     event.preventDefault();
     const options = Array.from(suggestions.children);
     const next = event.key === "ArrowDown" ? activeOption + 1 : activeOption < 0 ? options.length - 1 : activeOption - 1;
@@ -337,6 +400,67 @@ function showNextResults(focusNew = false) {
 
 moreResults.addEventListener("click", () => showNextResults(true));
 
+const selectedCategories = () => new Set(Array.from(categoryOptions.querySelectorAll(":checked"), field => field.value));
+let appliedFilterCount = 0;
+
+function renderCategories(categories, previouslySelected) {
+  categoryOptions.replaceChildren();
+  for (const {id, name} of categories) {
+    const label = addText(categoryOptions, "label", "");
+    const field = document.createElement("input");
+    field.type = "checkbox";
+    field.value = id;
+    field.checked = previouslySelected.has(id);
+    label.append(field, document.createTextNode(name));
+  }
+  categoryFilters.hidden = !categories.length;
+}
+
+function renderOrderedResults() {
+  if (!resultSet) return;
+  const {allItems} = resultSet;
+  const categories = selectedCategories();
+  const items = allItems.filter(item => !categories.size || categories.has(item.category_id));
+  if (sortResults.value !== "relevance") {
+    const direction = sortResults.value === "price-asc" ? 1 : -1;
+    items.sort((first, second) => {
+      if (first.price == null || second.price == null) return Number(first.price == null) - Number(second.price == null);
+      return direction * (Number(first.price) - Number(second.price));
+    });
+  }
+  resultSet.items = items;
+  results.replaceChildren();
+  showNextResults();
+  sortControl.hidden = !items.length;
+  document.querySelector("#reset-filters").disabled = !categories.size && !appliedFilterCount;
+  const count = appliedFilterCount + Number(categories.size > 0);
+  filterCount.textContent = count ? " · " + count : "";
+  filterCount.hidden = !count;
+  if (items.length && !items.some(item => item.available) && resultSet.clarification) {
+    status.textContent = resultSet.clarification;
+  } else if (items.length) {
+    const noun = new Intl.PluralRules("ru").select(items.length);
+    status.textContent = "Найдено " + items.length + " " + ({one: "товар", few: "товара", many: "товаров"}[noun] || "товара");
+  } else {
+    status.textContent = spellingOptions.hidden ? resultSet.clarification || "Уточните запрос" : "";
+  }
+}
+
+categoryOptions.addEventListener("change", renderOrderedResults);
+sortResults.addEventListener("change", renderOrderedResults);
+document.querySelector("#reset-filters").addEventListener("click", () => {
+  for (const key of Object.keys(catalogFilterNames)) {
+    const field = form.elements[key];
+    if (field.type === "checkbox") field.checked = false;
+    else field.value = "";
+  }
+  for (const field of categoryOptions.querySelectorAll(":checked")) field.checked = false;
+  validatePrice();
+  if (query.value.trim() && form.checkValidity()) form.requestSubmit();
+});
+
+if (matchMedia("(min-width: 62rem)").matches) filterPanel.open = true;
+
 form.addEventListener("input", validatePrice);
 form.addEventListener("invalid", event => {
   if (filterPanel.contains(event.target)) filterPanel.open = true;
@@ -350,6 +474,7 @@ form.addEventListener("submit", async (event) => {
   const controller = new AbortController();
   activeSearch = controller;
   resultSet = undefined;
+  sortControl.hidden = true;
   results.replaceChildren();
   pagination.hidden = true;
   correction.hidden = true;
@@ -381,23 +506,24 @@ form.addEventListener("submit", async (event) => {
     const data = await response.json();
     if (controller.signal.aborted) return;
     const requestId = data.tracked ? data.request_id : undefined;
-    const context = {version: data.catalog_version, platform: params.get("platform")};
-    resultSet = {items: data.results, requestId, context};
-    showNextResults();
+    const context = {version: data.catalog_version, platform: params.get("platform"), query: entered};
+    const matchingCategorySelection = form.dataset.lastQuery === entered ? selectedCategories() : new Set();
+    if (form.dataset.lastQuery !== entered) sortResults.value = "relevance";
+    form.dataset.lastQuery = entered;
+    renderCategories(data.result_categories ?? [], matchingCategorySelection);
+    resultSet = {allItems: data.results, requestId, context, clarification: data.clarification};
     renderSection("alternatives", data.alternatives, undefined, context);
     renderSection("recommendations", data.recommendations, requestId, context);
     const active = Object.keys(data.applied_filters);
-    const activeCount = active.length - Number(active.includes("price_min") && active.includes("price_max"));
-    filterCount.textContent = activeCount ? " · " + activeCount : "";
-    filterCount.hidden = !activeCount;
+    appliedFilterCount = active.length - Number(active.includes("price_min") && active.includes("price_max"));
     showFilters(data);
     correction.hidden = !data.corrected_query;
-    correction.textContent = data.corrected_query ? "Запрос распознан как «" + data.corrected_query + "»." : "";
+    correction.querySelector("strong").textContent = data.corrected_query ? "«" + data.corrected_query + "»" : "";
     for (const option of data.spelling_suggestions ?? []) {
       filterButton(spellingButtons, option, () => acceptSuggestion(option));
     }
     spellingOptions.hidden = !spellingButtons.children.length;
-    status.textContent = spellingOptions.hidden ? data.clarification || "Результаты поиска · " + data.results.length : "";
+    renderOrderedResults();
   } catch (error) {
     if (error.name !== "AbortError") status.textContent = "Поиск временно недоступен. Попробуйте ещё раз.";
   }

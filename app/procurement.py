@@ -22,8 +22,18 @@ MONTHS = r"(\d{1,3})\s*(?:мес(?:яц\w*)?\.?|months?)"
 YEAR = r"(?:на\s+год\b|(\d{1,2})\s*(?:года?|лет|years?)\b)"
 
 
+NEGATIVE_CONDITION = re.compile(
+    r"\b(?:без|не\s+для|исключить|кроме|not\s+for|without)\s+([^,;]+?)(?=\s+(?:для|на|с|стоимостью|до|от|и\s+без)\b|[,;]|$)",
+    re.IGNORECASE,
+)
+
+
+def positive_query(query):
+    return NEGATIVE_CONDITION.sub(" ", query)
+
+
 def requested_filters(query):
-    query = query.casefold().replace("ё", "е")
+    query = positive_query(query.casefold().replace("ё", "е"))
     platforms = matching_platforms(query)
     term = re.search(MONTHS, query)
     year = re.search(YEAR, query)
