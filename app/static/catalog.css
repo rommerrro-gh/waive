@@ -501,7 +501,8 @@
 }
 .catalog[data-view="search"] :is(h1, .search-box, .search-followup, #filter-suggestions) { grid-column: 1 / -1; }
 .catalog[data-view="search"] .catalog-controls { margin-block: 1.5rem 1.1rem; }
-.catalog[data-view="search"] #search-filters > summary { width: 100%; color: var(--ink); border-color: var(--edge); }
+.catalog[data-view="search"] #search-filters > summary { color: var(--ink); border-color: var(--edge); }
+.catalog[data-view="search"] #search-filters[open] > summary { width: 100%; }
 .catalog[data-view="search"] .catalog-layout { min-width: 0; }
 .catalog[data-view="search"] #status { color: var(--ink); font-size: 1.15rem; font-weight: 700; }
 .catalog[data-view="search"] .product-card { gap: .75rem; padding: 1.05rem; border-radius: .75rem; }
@@ -547,13 +548,13 @@
     border-right: 1px solid var(--edge);
     padding-right: clamp(1rem, 1.8vw, 1.7rem);
   }
-  .catalog[data-view="search"] #search-filters > summary {
+  .catalog[data-view="search"] #search-filters[open] > summary {
     padding: .3rem 0 .9rem;
     border: 0;
     border-radius: 0;
     font-size: 1.6rem;
   }
-  .catalog[data-view="search"] #search-filters > summary:hover { background: none; color: var(--brand); }
+  .catalog[data-view="search"] #search-filters[open] > summary:hover { background: none; color: var(--brand); }
   .catalog[data-view="search"] .filter-panel { margin: 0; padding: 0; border: 0; }
   .catalog[data-view="search"] .catalog-facets { display: block; margin: 0; }
   .catalog[data-view="search"] .stock-filter { border-block: 1px solid var(--edge); padding: .85rem 0; font-size: 1rem; }
