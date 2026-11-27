@@ -12,7 +12,7 @@ from app.spelling import clear_winner, rank_spellings
 from app.search import (
     as_card, is_kaspersky_query, matches_product_variant, matching_version, merge_candidates,
     one_edit_title, preferred_categories, recommend_for_anchor, resolve_catalog_query, resolve_search_input, resolve_suggestion_alias,
-    select_families,
+    select_families, vpn_offer, vpn_requested,
 )
 
 
@@ -93,6 +93,18 @@ class TypoTests(unittest.TestCase):
         self.assertEqual(resolve_search_input("ВПН"), "VPN")
         self.assertEqual(resolve_search_input("Kaspersky впн"), "Kaspersky VPN")
         self.assertEqual(resolve_search_input("впнтермин"), "впнтермин")
+        self.assertEqual(resolve_search_input("виртуальная частная сеть"), "VPN")
+
+    def test_vpn_purpose_requires_explicit_product_evidence(self):
+        self.assertTrue(vpn_requested("корпоративный VPN"))
+        self.assertTrue(vpn_requested("Kaspersky VPN"))
+        self.assertFalse(vpn_requested("видеонаблюдение через VPN"))
+        self.assertFalse(vpn_offer({"name": "IPVideoRecord Видеонаблюдение", "description": "доступ через VPN"}, "VPN"))
+        self.assertFalse(vpn_offer({"name": "F-Secure Elements Without VPN"}, "VPN"))
+        self.assertFalse(vpn_offer({"name": "МагПро OpenVPN (формуляр)"}, "VPN"))
+        self.assertTrue(vpn_offer({"name": "МагПро OpenVPN ГОСТ, лицензия"}, "VPN"))
+        self.assertTrue(vpn_offer({"name": "ViPNet Client"}, "VPN"))
+        self.assertFalse(vpn_offer({"name": "ViPNet Client", "vendor": "ИнфоТеКС"}, "Kaspersky VPN"))
 
     def test_trained_model_recovers_brands_without_catalog_candidates(self):
         for query, brand in (("качпеоский", "Kaspersky"), ("мимкосотф", "Microsoft"), ("адинэсс", "AnyDesk")):

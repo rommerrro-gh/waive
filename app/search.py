@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from html import unescape
 
 from app.brand_recovery import recover_brand
-from app.procurement import filter_offers
+from app.procurement import filter_offers, positive_query
 from app.relations import alternative_difference, category_coverage, comparable_offer, compatibility_evidence
 from app.requirements import catalog_os, check_requirement, parse_requirements, unmet_requirements
 from app.spelling import clear_winner, rank_spellings
@@ -16,6 +16,7 @@ NORMALIZATIONS = (
 )
 SEARCH_ALIASES = (
     (re.compile(r"\bвпн\b", re.I), "VPN"),
+    (re.compile(r"\bвиртуальн(?:ая|ую|ой|ые|ых)\s+частн(?:ая|ую|ой|ые|ых)\s+сет(?:ь|и|ей)\b", re.I), "VPN"),
     (re.compile(r"\bmax[ -]+patrol\b", re.I), "MaxPatrol"),
 )
 REMOTE_CATEGORIES = {"327029", "327030"}
@@ -24,6 +25,10 @@ SERVER_REQUEST = re.compile(r"(?:(?:купить|подобрать)\s+)?сер�
 ASTRA_PRODUCT = re.compile(r"(?:астра\s+линукс|astra\s+linux)(?:\s+(?:(?:common|special)\s+edition|ce|se))?", re.I)
 WINDOWS_PRODUCT = re.compile(r"windows(?:\s+(?:10|11|server(?:\s+20\d{2})?))?", re.I)
 OS_PRODUCT_PREFIX = r"^(?:(?:ос|операционная система|лицензия|microsoft)\s+)*"
+VPN_REQUEST = re.compile(r"^(?:(?:купить|подобрать|нуж(?:ен|на)|корпоративн\w+|защищенн\w+)\s+)*vpn\b", re.I)
+VPN_BROWSE = re.compile(VPN_REQUEST.pattern + r"(?:\s+для\s+(?:компани\w+|бизнеса|офиса|организаци\w+|дома))?\s*", re.I)
+VPN_IN_TITLE = re.compile(r"\b(?:vpn|openvpn|lirvpn|wireguard|l[23]vpn|ipsec|vipnet\s+(?:client|coordinator))\b", re.I)
+VPN_EXCLUDED_OFFER = re.compile(r"\b(?:without|без|no)\s+vpn\b|\b(?:формуляр|документация|установочный комплект)\b", re.I)
 VERSION = re.compile(r"(?<![\w.])\d+(?:\.\d+)+(?![\w.])")
 KASPERSKY_NAMES = ("kaspersky", "касперский", "касперски")
 KASPERSKY_VENDOR_NAMES = {"лаборатория касперского", "kaspersky", "kaspersky lab"}
@@ -90,6 +95,18 @@ SEARCH_OFFERS = """
         ORDER BY c.exact DESC, (o.available AND o.price > 0) DESC NULLS LAST, c.rank DESC, o.id
     ), c.rank DESC, o.available DESC, o.id
     LIMIT 100
+"""
+
+VPN_OFFERS = """
+    SELECT o.id AS offer_id, o.vendor_code, o.group_id, o.category_id, o.name, o.vendor, o.url,
+           o.price, o.currency, o.available, o.attributes, left(o.description, 1200) AS description, false AS exact
+    FROM offer_search s JOIN offer o ON (o.snapshot_id, o.id) = (s.snapshot_id, s.offer_id)
+    WHERE s.snapshot_id = %(snapshot)s AND (
+        s.name_normalized LIKE '%%vpn%%' OR s.name_normalized LIKE '%%vipnet client%%'
+        OR s.name_normalized LIKE '%%vipnet coordinator%%' OR s.name_normalized LIKE '%%wireguard%%'
+    )
+    ORDER BY o.available DESC, o.id
+    LIMIT 300
 """
 
 FUZZY_OFFERS = """
@@ -279,7 +296,23 @@ def preferred_categories(query):
     return set()
 
 
-def matches_platform_product(item, intent):
+def vpn_requested(query):
+    return bool(VPN_REQUEST.match(query) or (LEADING_BRAND.match(query) and re.search(r"\bvpn\s*$", query, re.I)))
+
+
+def vpn_offer(item, query):
+    name = normal_form(item["name"])
+    if not VPN_IN_TITLE.search(name) or VPN_EXCLUDED_OFFER.search(name):
+        return False
+    leading = LEADING_BRAND.match(query)
+    if not leading:
+        return True
+    brand = BRAND_BY_NAME[normal_form(leading[0])]
+    vendor = normal_form(item.get("vendor") or "").strip("«»\" ")
+    return vendor in KASPERSKY_VENDOR_NAMES if brand == "Kaspersky" else normal_form(brand) in vendor
+
+
+def matches_requested_product(item, intent):
     if item["exact"]:
         return True
     requested = normal_form(intent)
@@ -298,6 +331,8 @@ def normalize_query(query):
 
 def lexical_candidates(connection, snapshot, query, *, allow_fuzzy=True):
     params = {"snapshot": snapshot, "query": normalize_query(query)}
+    if VPN_BROWSE.fullmatch(query):
+        return [item for item in connection.execute(VPN_OFFERS, params) if vpn_offer(item, query)]
     if is_kaspersky_query(query):
         candidates = connection.execute(SEARCH_OFFERS, {**params, "query": "Kaspersky"}).fetchall()
         return [
@@ -311,6 +346,8 @@ def lexical_candidates(connection, snapshot, query, *, allow_fuzzy=True):
         if preferred:
             return preferred
     candidates = connection.execute(SEARCH_OFFERS, params).fetchall()
+    if vpn_requested(query):
+        return [item for item in candidates if vpn_offer(item, query)]
     categories = preferred_categories(query)
     if allow_fuzzy and not candidates and not categories and 4 <= len(query) <= 110 and len(query.split()) <= 12:
         candidates = typo_candidates(connection, params)
@@ -489,17 +526,22 @@ def assemble_results(connection, snapshot, query, lexical, semantic, filters=Non
     # Длинные формулировки чаще описывают задачу. Версия и артикул сохраняют приоритет.
     natural_language = len(query.split()) >= 5 and not versions
     merged = merge_candidates(lexical, semantic, 0.65 if natural_language else 1.3)
-    categories = preferred_categories(intent_query or query)
+    intent = intent_query or query
+    vpn = vpn_requested(positive_query(query))
+    categories = preferred_categories(intent)
     requirements = parse_requirements(query, filters)
+    def matches(item):
+        return (matches_requested_product(item, intent) and (not vpn or item["exact"] or vpn_offer(item, query)))
+
     matching = [item for item in merged if matches_product_variant(item, query, versions)
-                and matches_platform_product(item, intent_query or query)]
+                and matches(item)]
     if categories:
         preferred = [item for item in matching if item["exact"] or item["category_id"] in categories]
         if preferred:
             matching = preferred
     if filters or requirements:
         matching = [item for item in purchase_family_offers(connection, snapshot, matching, query, versions)
-                    if matches_platform_product(item, intent_query or query)]
+                    if matches(item)]
         matching, counts = filter_offers(matching, filters or {}, family_key, card_attributes)
         unmatched = {requirement.label for requirement in requirements if requirement.mandatory} if not matching else set()
         eligible = []
@@ -519,6 +561,9 @@ def assemble_results(connection, snapshot, query, lexical, semantic, filters=Non
         diagnostics.update(families_before=count, families_after=count, conditions={})
     lexical_ids = {item["offer_id"] for item in lexical}
     ranked = select_families(matching)
+    if vpn:
+        ranked.sort(key=lambda item: (item["exact"], item["available"],
+                                      not re.search(r"\b(?:own|with|с) vpn\b", item["name"], re.I)), reverse=True)
     preferences = [requirement for requirement in requirements if not requirement.mandatory]
     if preferences:
         ranked.sort(key=lambda item: (item["exact"], sum(
@@ -531,12 +576,12 @@ def assemble_results(connection, snapshot, query, lexical, semantic, filters=Non
         card["match_type"] = "direct"
         card["bundle_available"] = card["available"] and bool((coverage or {}).get(card["category_id"]))
     alternatives = find_alternatives(
-        connection, snapshot, results, lexical, semantic, categories, requirements, intent_query or query,
+        connection, snapshot, results, lexical, semantic, categories, requirements, matches,
     )
     # В top4 оставляем дополнения на свободных местах. Подбор по выбранному товару независим от размера выдачи.
     free = 4 - len(results) - len(alternatives)
     recommendations = []
-    if coverage and results and free > 0 and results[0]["available"]:
+    if not vpn and coverage and results and free > 0 and results[0]["available"]:
         recommendations, _ = recommend_for_anchor(
             connection, snapshot, results[0], coverage, requirements, free,
             (card["family_id"] for card in (*results, *alternatives)),
@@ -544,7 +589,7 @@ def assemble_results(connection, snapshot, query, lexical, semantic, filters=Non
     return results, alternatives, recommendations
 
 
-def find_alternatives(connection, snapshot, results, lexical, semantic, categories, requirements, intent):
+def find_alternatives(connection, snapshot, results, lexical, semantic, categories, requirements, matches):
     if any(card["available"] for card in results):
         return []
     exact = next((item for item in lexical if item["exact"]), None)
@@ -563,7 +608,7 @@ def find_alternatives(connection, snapshot, results, lexical, semantic, categori
     output = []
     for item in candidates:
         family = family_key(item)
-        if not item["available"] or family in taken or not matches_platform_product(item, intent):
+        if not item["available"] or family in taken or not matches(item):
             continue
         card = as_card(item, "")
         if unmet_requirements(item, card["attributes"], requirements) or (anchor and not comparable_offer(anchor, card)):

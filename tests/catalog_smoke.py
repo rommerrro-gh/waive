@@ -8,7 +8,7 @@ import json
 import psycopg
 from psycopg.rows import dict_row
 
-from app.search import load_category_coverage
+from app.search import load_category_coverage, vpn_offer
 
 
 def get(path, headers=None, body=None):
@@ -120,6 +120,12 @@ for query in ("впн", "ВПН"):
     assert result["results"] == get("/search?q=VPN&semantic=false")["results"]
     suggestions = get("/suggest?" + params)["suggestions"]
     assert suggestions[0] == "VPN" and suggestions == get("/suggest?q=VPN")["suggestions"]
+for query in ("впн", "VPN для бизнеса", "виртуальная частная сеть", "Kaspresky VPN"):
+    response = get("/search?" + urlencode({"q": query, "expanded": "true"}))
+    assert response["results"] and all(vpn_offer(item, response["corrected_query"] or query) for item in response["results"]), response
+    assert not response["recommendations"]
+    assert all(item["offer_id"] != "176956" for item in response["top4"])
+assert get("/search?q=176956")["results"][0]["offer_id"] == "176956"
 typo_title = urlencode({"q": "Kaspresky Passwrod Manager"})
 assert "Kaspersky Password Manager" in get("/suggest?" + typo_title)["suggestions"]
 assert get("/search?" + typo_title)["corrected_query"] == "Kaspersky Password Manager"
