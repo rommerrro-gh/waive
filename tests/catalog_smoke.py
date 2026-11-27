@@ -124,8 +124,12 @@ for query in ("впн", "VPN для бизнеса", "виртуальная ч�
     response = get("/search?" + urlencode({"q": query, "expanded": "true"}))
     assert response["results"] and all(vpn_offer(item, response["corrected_query"] or query) for item in response["results"]), response
     assert not response["recommendations"]
+    assert all(item["available"] for item in response["results"])
     assert all(item["offer_id"] != "176956" for item in response["top4"])
 assert get("/search?q=176956")["results"][0]["offer_id"] == "176956"
+for query, family in (("AnyDesk", "306539"), ("Microsoft Visio Standard 2024", "391350")):
+    response = get("/search?" + urlencode({"q": query, "expanded": "true"}))
+    assert {item["group_id"] for item in response["results"]} == {family}, response
 typo_title = urlencode({"q": "Kaspresky Passwrod Manager"})
 assert "Kaspersky Password Manager" in get("/suggest?" + typo_title)["suggestions"]
 assert get("/search?" + typo_title)["corrected_query"] == "Kaspersky Password Manager"

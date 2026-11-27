@@ -300,6 +300,16 @@ def vpn_requested(query):
     return bool(VPN_REQUEST.match(query) or (LEADING_BRAND.match(query) and re.search(r"\bvpn\s*$", query, re.I)))
 
 
+def vendor_matches(item, brand):
+    vendor = normal_form(item.get("vendor") or "").strip("«»\" ")
+    if brand == "Kaspersky":
+        return vendor in KASPERSKY_VENDOR_NAMES
+    aliases = (brand, *SPELLING_ALIASES.get(brand, ()))
+    if brand == "Astra Linux":
+        aliases += ("астра",)
+    return any(re.search(r"(?<!\w)" + re.escape(normal_form(alias)) + r"(?!\w)", vendor) for alias in aliases)
+
+
 def vpn_offer(item, query):
     name = normal_form(item["name"])
     if not VPN_IN_TITLE.search(name) or VPN_EXCLUDED_OFFER.search(name):
@@ -308,8 +318,7 @@ def vpn_offer(item, query):
     if not leading:
         return True
     brand = BRAND_BY_NAME[normal_form(leading[0])]
-    vendor = normal_form(item.get("vendor") or "").strip("«»\" ")
-    return vendor in KASPERSKY_VENDOR_NAMES if brand == "Kaspersky" else normal_form(brand) in vendor
+    return vendor_matches(item, brand)
 
 
 def matches_requested_product(item, intent):
@@ -520,6 +529,31 @@ def purchase_family_offers(connection, snapshot, matching, query, versions):
     return sorted(seen.values(), key=lambda item: positions[family_key(item)])
 
 
+def named_families(connection, snapshot, intent, lexical):
+    """A confirmed catalog family constrains the scope of a product-name search."""
+    query = normal_form(intent)
+    if len(query) < 4 or not lexical or any(item["exact"] for item in lexical):
+        return set()
+    group_ids = sorted({item["group_id"] for item in lexical if item["group_id"]})
+    if not group_ids:
+        return set()
+
+    def family_name(value):
+        return re.sub(r"^(?:программа|лицензия на)\s+", "", normal_form(value))
+
+    query = family_name(query)
+    names = [(row["id"], family_name(row["name"])) for row in connection.execute("""
+        SELECT id, name FROM category WHERE snapshot_id = %s AND id = ANY(%s)
+    """, (snapshot, group_ids))]
+    exact = {identifier for identifier, name in names if name == query}
+    if exact:
+        return exact
+    if len(query.split()) >= 2 and not re.search(r"\b20\d{2}\b", query):
+        return {identifier for identifier, name in names
+                if " ".join(re.sub(r"\b20\d{2}\b", " ", name).split()) == query}
+    return set()
+
+
 def assemble_results(connection, snapshot, query, lexical, semantic, filters=None, diagnostics=None, *,
                      expanded=False, coverage=None, intent_query=None):
     versions = set(VERSION.findall(query))
@@ -530,15 +564,23 @@ def assemble_results(connection, snapshot, query, lexical, semantic, filters=Non
     vpn = vpn_requested(positive_query(query))
     categories = preferred_categories(intent)
     requirements = parse_requirements(query, filters)
+    families = set() if vpn or categories else named_families(connection, snapshot, intent, lexical)
+    brand = (BRAND_BY_NAME.get(normal_form(intent)) if not categories and not families and not vpn else None)
+    use_vendor = brand and any(vendor_matches(item, brand) for item in lexical)
+    brand_in_title = re.compile(r"(?<!\w)" + re.escape(normal_form(brand)) + r"(?!\w)") if brand and not use_vendor else None
+
     def matches(item):
-        return (matches_requested_product(item, intent) and (not vpn or item["exact"] or vpn_offer(item, query)))
+        if item["exact"]:
+            return True
+        return (matches_requested_product(item, intent)
+                and (not categories or item["category_id"] in categories)
+                and (not families or item["group_id"] in families)
+                and (not use_vendor or vendor_matches(item, brand))
+                and (not brand_in_title or brand_in_title.search(normal_form(item["name"])))
+                and (not vpn or vpn_offer(item, query)))
 
     matching = [item for item in merged if matches_product_variant(item, query, versions)
                 and matches(item)]
-    if categories:
-        preferred = [item for item in matching if item["exact"] or item["category_id"] in categories]
-        if preferred:
-            matching = preferred
     if filters or requirements:
         matching = [item for item in purchase_family_offers(connection, snapshot, matching, query, versions)
                     if matches(item)]
@@ -562,6 +604,9 @@ def assemble_results(connection, snapshot, query, lexical, semantic, filters=Non
     lexical_ids = {item["offer_id"] for item in lexical}
     ranked = select_families(matching)
     if vpn:
+        available = [item for item in ranked if item["available"]]
+        if available:
+            ranked = available
         ranked.sort(key=lambda item: (item["exact"], item["available"],
                                       not re.search(r"\b(?:own|with|с) vpn\b", item["name"], re.I)), reverse=True)
     preferences = [requirement for requirement in requirements if not requirement.mandatory]
@@ -576,7 +621,8 @@ def assemble_results(connection, snapshot, query, lexical, semantic, filters=Non
         card["match_type"] = "direct"
         card["bundle_available"] = card["available"] and bool((coverage or {}).get(card["category_id"]))
     alternatives = find_alternatives(
-        connection, snapshot, results, lexical, semantic, categories, requirements, matches,
+        connection, snapshot, results, lexical, semantic, categories, requirements,
+        lambda item: matches_requested_product(item, intent) and (not vpn or vpn_offer(item, query)),
     )
     # В top4 оставляем дополнения на свободных местах. Подбор по выбранному товару независим от размера выдачи.
     free = 4 - len(results) - len(alternatives)
@@ -784,13 +830,7 @@ def spelling_matches(connection, snapshot, label):
                   if key == name.casefold() or key.startswith(name.casefold() + " ")), None)
     if not brand:
         return rows
-    if brand == "Kaspersky":
-        return [row for row in rows if normal_form(row["vendor"] or "").strip("«»\" ") in KASPERSKY_VENDOR_NAMES]
-    aliases = (brand, *SPELLING_ALIASES[brand])
-    if brand == "Astra Linux":
-        aliases += ("астра",)
-    vendor_brand = re.compile(r"(?<!\w)(?:" + "|".join(re.escape(normal_form(alias)) for alias in aliases) + r")(?!\w)")
-    return [row for row in rows if vendor_brand.search(normal_form(row["vendor"] or ""))]
+    return [row for row in rows if vendor_matches(row, brand)]
 
 
 def resolve_catalog_query(connection, snapshot, query, *, prefixes=None):
