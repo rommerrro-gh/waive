@@ -1,9 +1,5 @@
-const profileKey = "waive-purchase-profile-v1";
 const approvalKey = "waive-approval-v1";
 const workplaces = document.querySelector("#workplaces");
-const profileStatus = document.querySelector("#profile-status");
-const restoreProfile = document.querySelector("#restore-profile");
-const deleteProfile = document.querySelector("#delete-profile");
 const approval = document.querySelector("#approval");
 const approvalItems = document.querySelector("#approval-items");
 const csvButton = document.querySelector("#export-approval");
@@ -21,11 +17,7 @@ const bundleMessage = document.querySelector("#bundle-message");
 const pageTitle = document.querySelector("#page-title");
 const businessLink = document.querySelector("#business-link");
 const backToSearch = document.querySelector("#back-to-search");
-const businessProfile = document.querySelector("#business-profile");
 const businessApproval = document.querySelector("#business-approval");
-const profileCriteria = document.querySelector("#profile-criteria");
-let profile = readLocal(profileKey, null);
-let lastProcurementQuery;
 let bundleRequest;
 const saved = new Map(readLocal(approvalKey, []).map(entry => [entry.item.offer_id, entry]));
 
@@ -46,69 +38,19 @@ function saveLocal(key, value) {
   }
 }
 
-function applyProfile() {
-  for (const key of Object.keys(filterNames)) {
-    const select = form.elements[key];
-    const value = profile[key] || "";
-    if (key === "term" && /^\d{1,3}$/.test(value) && !Array.from(select.options).some(option => option.value === value)) {
-      select.add(new Option(value + " мес.", value));
-    }
-    select.value = value;
-  }
-  workplaces.value = profile.count || "";
-}
-
-function updateProfileControls(message = "") {
-  restoreProfile.hidden = deleteProfile.hidden = !profile;
-  profileStatus.textContent = message || (profile ? "Профиль активен. Изменения фильтров действуют для текущего поиска." : "");
-  const criteria = Object.keys(filterNames).map(key => {
-    const field = form.elements[key];
-    return field.value ? field.selectedOptions[0].textContent : "";
-  }).filter(Boolean);
-  profileCriteria.textContent = criteria.join(" · ");
-}
-
-function restoreForNewQuery() {
-  if (isBusinessView() && profile && lastProcurementQuery != null && query.value.trim() !== lastProcurementQuery) {
-    applyProfile();
-    updateProfileControls();
-    lastProcurementQuery = undefined;
-  }
-}
-
-document.querySelector("#save-profile").addEventListener("click", () => {
-  if (!workplaces.reportValidity()) return;
-  const fields = Object.fromEntries(Object.keys(filterNames).map(key => [key, form.elements[key].value]));
-  profile = {...fields, count: workplaces.value};
-  updateProfileControls(saveLocal(profileKey, profile) ? "Профиль сохранён в этом браузере." : "Профиль доступен до закрытия страницы.");
-});
-restoreProfile.addEventListener("click", () => {
-  applyProfile();
-  updateProfileControls();
-});
-deleteProfile.addEventListener("click", () => {
-  profile = null;
-  updateProfileControls(saveLocal(profileKey, null) ? "Профиль удалён." : "Не удалось удалить сохранённый профиль из браузера.");
-});
-for (const key of Object.keys(filterNames)) {
-  form.elements[key].addEventListener("change", () => updateProfileControls());
-}
-
 function isBusinessView() {
   return location.pathname === "/business";
 }
 
-function updateView({focus = false, initial = false} = {}) {
+function updateView({focus = false} = {}) {
   const business = isBusinessView();
   document.body.dataset.view = business ? "business" : "search";
   document.querySelector(".license-filters").open = false;
   pageTitle.textContent = business ? "Закупки для бизнеса" : "Поиск по каталогу Softline";
   document.title = "Waive | " + pageTitle.textContent;
-  businessProfile.hidden = businessApproval.hidden = backToSearch.hidden = !business;
+  businessApproval.hidden = backToSearch.hidden = !business;
   businessLink.hidden = business;
-  if (business && profile && (initial || !query.value.trim())) applyProfile();
   if (!business) clearBundle();
-  updateProfileControls();
   if (focus) {
     pageTitle.tabIndex = -1;
     pageTitle.focus();
@@ -185,7 +127,11 @@ function addProcurementActions(actions, item, context) {
   button.className = "secondary";
   button.dataset.approvalId = item.offer_id;
   button.addEventListener("click", () => {
-    if (!saved.has(item.offer_id) && !workplaces.reportValidity()) return;
+    if (!saved.has(item.offer_id) && !workplaces.checkValidity()) {
+      approval.open = true;
+      workplaces.reportValidity();
+      return;
+    }
     toggleApproval({item, count: workplaces.value, anchor: context.anchor});
   });
   updateApprovalButton(button);
@@ -366,4 +312,4 @@ document.querySelector("#quote-download").addEventListener("click", () => {
   download("waive-quote-request.txt", quoteText.value, "text/plain;charset=utf-8");
 });
 renderApproval();
-updateView({initial: true});
+updateView();

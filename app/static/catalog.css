@@ -168,23 +168,8 @@
 .catalog #filter-suggestions { margin-bottom: .9rem; }
 .catalog #filter-details { margin-block: .65rem; }
 
-.catalog .business-profile {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
-  gap: .7rem 1rem;
-  margin: 1rem 0;
-  padding: 1rem;
-  border: 1px solid var(--edge);
-  border-radius: .75rem;
-}
-.catalog .business-profile :is(h2, p, label) { margin: 0; }
-.catalog .business-profile h2 { align-self: center; }
-.catalog #profile-criteria { color: var(--muted); align-self: center; }
-.catalog #profile-criteria:empty { display: none; }
-.catalog #workplaces { display: block; width: 9.5rem; margin-top: .35rem; padding: .45rem .65rem; }
-.catalog .profile-actions { flex: 1 1 auto; }
-.catalog #profile-status { color: var(--muted); }
+.catalog .workplaces-field { display: block; margin: .9rem 0; }
+.catalog #workplaces { display: block; width: min(100%, 9.5rem); margin-top: .35rem; padding: .45rem .65rem; }
 
 .catalog[data-view="business"] .catalog-layout {
   display: grid;
@@ -550,8 +535,6 @@
   .catalog :is(h1, .search-box, .search-followup, #filter-suggestions) { grid-column: 1 / -1; }
   .catalog .catalog-controls { grid-column: 1; }
   .catalog .catalog-layout { grid-column: 2; }
-  .catalog[data-view="business"] .catalog-controls { grid-row: span 2; }
-  .catalog[data-view="business"] .business-profile { grid-column: 2; margin-bottom: 0; }
   .catalog[data-view="business"] #filter-title { padding-bottom: .9rem; }
   .catalog[data-view="search"] .results-heading { min-height: 2.75rem; margin-bottom: 1.75rem; }
   .catalog[data-view="search"] #sort-results { min-width: 15rem; padding-inline: .9rem; font-size: 1.05rem; }

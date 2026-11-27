@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Waive | Поиск по каталогу</title>
   <link rel="stylesheet" href="/style.css">
-  <link rel="stylesheet" href="/catalog.css?v=13">
-  <script src="/search.js?v=12" defer></script>
-  <script src="/procurement.js?v=7" defer></script>
+  <link rel="stylesheet" href="/catalog.css?v=14">
+  <script src="/search.js?v=13" defer></script>
+  <script src="/procurement.js?v=8" defer></script>
 </head>
 <body class="catalog" data-view="search">
   <header class="site-header catalog-shell">
@@ -115,19 +115,6 @@
         </section>
       </div>
     </form>
-    <section id="business-profile" class="business-profile" hidden aria-labelledby="profile-title">
-      <h2 id="profile-title">Профиль закупки</h2>
-      <p id="profile-criteria"></p>
-        <label>Рабочих мест
-          <input id="workplaces" type="number" min="1" max="1000000" step="1" placeholder="Например, 50">
-        </label>
-        <div class="profile-actions card-actions">
-          <button id="save-profile" class="secondary" type="button">Сохранить профиль закупки</button>
-          <button id="restore-profile" class="secondary" type="button" hidden>Подставить профиль</button>
-          <button id="delete-profile" class="secondary" type="button" hidden>Удалить профиль</button>
-          <span id="profile-status" role="status"></span>
-        </div>
-    </section>
     <div class="catalog-layout">
       <div class="catalog-results">
         <div class="results-heading">
@@ -158,6 +145,9 @@
       <aside id="business-approval" hidden aria-label="Закупки">
         <details id="approval" class="approval" open>
           <summary id="approval-count">Список на согласование · 0</summary>
+          <label class="workplaces-field">Рабочих мест
+            <input id="workplaces" type="number" min="1" max="1000000" step="1" placeholder="Например, 50">
+          </label>
           <p id="approval-empty">Добавьте предложения из поиска или комплекта.</p>
           <ul id="approval-items"></ul>
           <div class="card-actions">

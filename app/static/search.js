@@ -312,7 +312,6 @@ function closeSuggestions() {
 
 function acceptSuggestion(value) {
   query.value = value;
-  restoreForNewQuery();
   closeSuggestions();
   form.requestSubmit();
 }
@@ -341,7 +340,6 @@ async function fetchSuggestions(prefix) {
 }
 
 function scheduleSuggestions() {
-  restoreForNewQuery();
   closeSuggestions();
   const prefix = query.value.trim();
   if (prefix.length >= 2 && prefix.length <= 120 && /[\p{L}\p{N}]/u.test(prefix)) {
@@ -589,7 +587,6 @@ form.addEventListener("submit", async (event) => {
   const sameQuery = form.dataset.lastQuery === entered;
   const matchingCategorySelection = sameQuery ? selectedCategories() : new Set();
   form.dataset.lastQuery = entered;
-  lastProcurementQuery = entered || undefined;
   if (!entered) {
     params.delete("q");
     params.set("sort", sortResults.value);
@@ -605,8 +602,6 @@ form.addEventListener("submit", async (event) => {
   params.set("with_popularity", "true");
   params.set("expanded", "true");
   if (demoMode) params.set("demo", "true");
-  if (isBusinessView() && profile) params.set("with_profile", "true");
-  if (isBusinessView()) updateProfileControls();
   try {
     const response = await fetch("/search?" + params, { signal: controller.signal });
     if (!response.ok) throw new Error("Поиск недоступен");
