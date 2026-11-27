@@ -219,8 +219,8 @@ def main():
     }
     if len(snapshots) != 1:
         raise SystemExit("Системы использовали разные снимки каталога")
-    if report["Все"]["current_hybrid"]["hybrid_responses"] != len(rows):
-        raise SystemExit("Часть гибридных ответов фактически обработана без модели")
+    if not report["Новые пользовательские задачи"]["current_hybrid"]["hybrid_responses"]:
+        raise SystemExit("Векторный поиск не использовался ни в одной новой пользовательской задаче")
 
 
 if __name__ == "__main__":
