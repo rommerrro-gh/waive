@@ -130,6 +130,14 @@ assert get("/search?q=176956")["results"][0]["offer_id"] == "176956"
 for query, family in (("AnyDesk", "306539"), ("Microsoft Visio Standard 2024", "391350")):
     response = get("/search?" + urlencode({"q": query, "expanded": "true"}))
     assert {item["group_id"] for item in response["results"]} == {family}, response
+for query, categories in (("ноутбук", {"70824"}), ("монитор", {"80843"}),
+                          ("принтер", {"91774", "93995"}), ("коммутатор", {"85741"})):
+    response = get("/search?" + urlencode({"q": query, "expanded": "true"}))
+    assert response["results"] and {item["category_id"] for item in response["results"]} <= categories, response
+assert get("/search?" + urlencode({"q": "Качперкский"}))["corrected_query"] == "Kaspersky"
+recovery = get("/search?" + urlencode({"q": "восстановить файлы после сбоя", "expanded": "true"}))
+assert recovery["results"] and all(not re.search(r"\b(?:SQL|Exchange|Outlook)\b", item["name"], re.I)
+                                   for item in recovery["results"])
 typo_title = urlencode({"q": "Kaspresky Passwrod Manager"})
 assert "Kaspersky Password Manager" in get("/suggest?" + typo_title)["suggestions"]
 assert get("/search?" + typo_title)["corrected_query"] == "Kaspersky Password Manager"

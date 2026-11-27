@@ -487,11 +487,11 @@
 .catalog[data-view="search"] main:has(#status:not(:empty), #spelling-options:not([hidden])) #search-help { display: none; }
 .catalog[data-view="search"] #query-correction {
   margin: .75rem 0 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font-size: clamp(1rem, 1.7vw, 1.4rem);
+  padding: .7rem .9rem;
+  border-left: 2px solid var(--brand);
+  background: var(--wash);
+  color: var(--ink);
+  font-size: clamp(1rem, 1.55vw, 1.22rem);
 }
 .catalog[data-view="search"] #query-correction strong { color: var(--ink); }
 .catalog[data-view="search"] #search { display: contents; }

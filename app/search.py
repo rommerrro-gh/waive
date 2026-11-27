@@ -22,6 +22,14 @@ SEARCH_ALIASES = (
 REMOTE_CATEGORIES = {"327029", "327030"}
 SERVER_CATEGORIES = {"86563", "87093", "87268", "87276"}
 SERVER_REQUEST = re.compile(r"(?:(?:купить|подобрать)\s+)?сервер(?:ы)?", re.IGNORECASE)
+HARDWARE_REQUESTS = (
+    (re.compile(r"ноутбук(?:и)?"), {"70824"}),
+    (re.compile(r"монитор(?:ы)?"), {"80843"}),
+    (re.compile(r"принтер(?:ы)?|мфу"), {"91774", "93995"}),
+    (re.compile(r"коммутатор(?:ы)?"), {"85741"}),
+)
+WORKSTATION_SECURITY_REQUEST = re.compile(r"антивирус\w*.*рабоч\w+\s+станци", re.I)
+SPECIALIZED_RECOVERY = re.compile(r"\b(?:sql|postgresql|exchange|outlook|pst|edb|почтов\w*|баз[аыуе]? данных)\b", re.I)
 ASTRA_PRODUCT = re.compile(r"(?:астра\s+линукс|astra\s+linux)(?:\s+(?:(?:common|special)\s+edition|ce|se))?", re.I)
 WINDOWS_PRODUCT = re.compile(r"windows(?:\s+(?:10|11|server(?:\s+20\d{2})?))?", re.I)
 OS_PRODUCT_PREFIX = r"^(?:(?:ос|операционная система|лицензия|microsoft)\s+)*"
@@ -243,6 +251,10 @@ def preferred_categories(query):
     if SERVER_REQUEST.fullmatch(query):
         return SERVER_CATEGORIES
     normalized = query.casefold().replace("ё", "е")
+    hardware = re.sub(r"^(?:купить|подобрать|найти)\s+", "", normalized)
+    for pattern, categories in HARDWARE_REQUESTS:
+        if pattern.fullmatch(hardware):
+            return categories
     if ASTRA_PRODUCT.fullmatch(normalized):
         return {"222320"}
     if WINDOWS_PRODUCT.fullmatch(normalized):
@@ -564,20 +576,27 @@ def assemble_results(connection, snapshot, query, lexical, semantic, filters=Non
     vpn = vpn_requested(positive_query(query))
     categories = preferred_categories(intent)
     requirements = parse_requirements(query, filters)
+    general_file_recovery = categories == {"5922"} and not SPECIALIZED_RECOVERY.search(query)
     families = set() if vpn or categories else named_families(connection, snapshot, intent, lexical)
     brand = (BRAND_BY_NAME.get(normal_form(intent)) if not categories and not families and not vpn else None)
     use_vendor = brand and any(vendor_matches(item, brand) for item in lexical)
     brand_in_title = re.compile(r"(?<!\w)" + re.escape(normal_form(brand)) + r"(?!\w)") if brand and not use_vendor else None
+    workstation = WORKSTATION_SECURITY_REQUEST.search(query)
+
+    def matches_purpose(item):
+        return (matches_requested_product(item, intent)
+                and (not workstation or workstation_security(item))
+                and (not general_file_recovery or not SPECIALIZED_RECOVERY.search(item["name"]))
+                and (not vpn or vpn_offer(item, query)))
 
     def matches(item):
         if item["exact"]:
             return True
-        return (matches_requested_product(item, intent)
+        return (matches_purpose(item)
                 and (not categories or item["category_id"] in categories)
                 and (not families or item["group_id"] in families)
                 and (not use_vendor or vendor_matches(item, brand))
-                and (not brand_in_title or brand_in_title.search(normal_form(item["name"])))
-                and (not vpn or vpn_offer(item, query)))
+                and (not brand_in_title or brand_in_title.search(normal_form(item["name"]))))
 
     matching = [item for item in merged if matches_product_variant(item, query, versions)
                 and matches(item)]
@@ -621,8 +640,7 @@ def assemble_results(connection, snapshot, query, lexical, semantic, filters=Non
         card["match_type"] = "direct"
         card["bundle_available"] = card["available"] and bool((coverage or {}).get(card["category_id"]))
     alternatives = find_alternatives(
-        connection, snapshot, results, lexical, semantic, categories, requirements,
-        lambda item: matches_requested_product(item, intent) and (not vpn or vpn_offer(item, query)),
+        connection, snapshot, results, lexical, semantic, categories, requirements, matches_purpose,
     )
     # В top4 оставляем дополнения на свободных местах. Подбор по выбранному товару независим от размера выдачи.
     free = 4 - len(results) - len(alternatives)

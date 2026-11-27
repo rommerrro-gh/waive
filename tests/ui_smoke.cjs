@@ -26,7 +26,7 @@ async function main() {
     await input.fill("впн");
     await page.getByRole("option", {name: "VPN", exact: true}).waitFor();
     await input.press("Enter");
-    await page.getByText("Результаты для «VPN»", {exact: true}).waitFor();
+    await page.getByText("Запрос распознан как «VPN».", {exact: true}).waitFor();
     await page.locator("#results article").first().waitFor();
     await input.fill("адинэсс");
     await page.getByRole("option", {name: "AnyDesk", exact: true}).waitFor();
@@ -59,10 +59,10 @@ async function main() {
     await page.getByRole("option", {name: "AnyDesk", exact: true}).waitFor();
     await input.clear();
     assert.equal(await input.getAttribute("aria-expanded"), "false");
-    await input.fill("каспрсикй");
+    await input.fill("Качперкский");
     await page.getByRole("option", {name: "Kaspersky", exact: true}).waitFor();
     await page.getByRole("button", {name: "Найти", exact: true}).click();
-    await page.getByText("Результаты для «Kaspersky»", {exact: true}).waitFor();
+    await page.getByText("Запрос распознан как «Kaspersky».", {exact: true}).waitFor();
     await input.fill("каспер");
     await page.getByRole("option", {name: "Kaspersky", exact: true}).waitFor();
     await input.press("ArrowDown");
@@ -81,7 +81,7 @@ async function main() {
     assert.deepEqual((await cards.locator("h2").allTextContents()).slice(0, 12), firstPage);
     await input.fill("касперчкий");
     await page.getByRole("button", {name: "Найти", exact: true}).click();
-    await page.getByText("Результаты для «Kaspersky»", {exact: true}).waitFor();
+    await page.getByText("Запрос распознан как «Kaspersky».", {exact: true}).waitFor();
     assert.equal(await cards.count(), 12);
     const sort = page.getByRole("combobox", {name: "Сортировка"});
     await sort.selectOption("price-asc");
@@ -228,7 +228,7 @@ async function main() {
     assert.equal(await more.isVisible(), false);
     const bundle = page.getByRole("region", {name: "Дополнения к выбранному товару"});
     await bundle.getByText(/Поддержка ОС: windows/i).first().waitFor();
-    await bundle.locator("article").nth(1).getByRole("button", {name: "На согласование"}).click();
+    await bundle.locator("article:nth-of-type(n+2)").getByRole("button", {name: "На согласование"}).first().click();
     await page.getByText("Список на согласование · 2").waitFor();
     await page.getByRole("link", {name: "К поиску по каталогу", exact: true}).click();
     assert.equal(await page.getByText("Список на согласование · 2").isVisible(), false);
