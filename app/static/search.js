@@ -57,18 +57,17 @@ function attributeValue(item, ...keys) {
   return null;
 }
 
-function addProductLink(parent, item, requestId, catalogVersion, label = "Карточка на Softline") {
+function addProductLink(parent, item, catalogVersion, label = "Карточка на Softline") {
   if (/^https?:\/\//i.test(item.url || "")) {
     const link = addText(parent, "a", label);
     link.href = item.url;
-    if (requestId || (!demoMode && visitId && catalogVersion)) {
+    if (!demoMode && visitId && catalogVersion) {
       link.addEventListener("click", () => {
-        fetch("/analytics/events/click", {
+        fetch("/catalog/visits", {
           method: "POST", keepalive: true,
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({
-            request_id: requestId, offer_id: item.offer_id,
-            visit_id: demoMode ? undefined : visitId, catalog_version: catalogVersion,
+            visit_id: visitId, offer_id: item.offer_id, catalog_version: catalogVersion,
           }),
         }).catch(() => {});
       });
@@ -76,10 +75,10 @@ function addProductLink(parent, item, requestId, catalogVersion, label = "Кар
   }
 }
 
-function renderSection(id, cards, requestId, context) {
+function renderSection(id, cards, context) {
   const section = document.querySelector("#" + id);
   section.hidden = !cards.length;
-  section.querySelector(".cards").replaceChildren(...cards.map(item => productCard(item, requestId, context)));
+  section.querySelector(".cards").replaceChildren(...cards.map(item => productCard(item, context)));
 }
 
 function productIcon(item) {
@@ -96,7 +95,7 @@ function catalogArt(item) {
   return "package";
 }
 
-function productCard(item, requestId, context) {
+function productCard(item, context) {
   const card = document.createElement("article");
   card.className = "product-card";
   const body = addText(card, "div", "");
@@ -141,7 +140,7 @@ function productCard(item, requestId, context) {
     syncComparison();
   });
   renderCompareButton(button);
-  addProductLink(actions, item, requestId, context?.version, "В каталог");
+  addProductLink(actions, item, context?.version, "В каталог");
   if (context && !context.anchor && item.bundle_available) {
     filterButton(footer, isBusinessView() ? "Подобрать комплект" : "Подобрать дополнения", () => loadBundle(item, context));
     footer.lastElementChild.classList.add("bundle-toggle");
@@ -388,9 +387,9 @@ function validatePrice() {
 }
 
 function showNextResults(focusNew = false) {
-  const {items, requestId, context, total = items.length} = resultSet;
+  const {items, context, total = items.length} = resultSet;
   const start = results.children.length;
-  const cards = items.slice(start, start + pageSize).map(item => productCard(item, requestId, context));
+  const cards = items.slice(start, start + pageSize).map(item => productCard(item, context));
   results.append(...cards);
   const shown = results.children.length;
   pagination.hidden = shown >= total;
@@ -598,21 +597,18 @@ form.addEventListener("submit", async (event) => {
     }
     return;
   }
-  params.set("track", "true");
   params.set("with_popularity", "true");
   params.set("expanded", "true");
-  if (demoMode) params.set("demo", "true");
   try {
     const response = await fetch("/search?" + params, { signal: controller.signal });
     if (!response.ok) throw new Error("Поиск недоступен");
     const data = await response.json();
     if (controller.signal.aborted) return;
-    const requestId = data.tracked ? data.request_id : undefined;
     const context = {version: data.catalog_version, platform: params.get("platform"), query: entered};
     renderCategories(data.result_categories ?? [], matchingCategorySelection);
-    resultSet = {allItems: data.results, requestId, context, popularity: data.popularity, clarification: data.clarification};
-    renderSection("alternatives", data.alternatives, undefined, context);
-    renderSection("recommendations", data.recommendations, requestId, context);
+    resultSet = {allItems: data.results, context, popularity: data.popularity, clarification: data.clarification};
+    renderSection("alternatives", data.alternatives, context);
+    renderSection("recommendations", data.recommendations, context);
     updateAppliedFilters(data.applied_filters);
     showFilters(data);
     correction.hidden = !data.corrected_query;

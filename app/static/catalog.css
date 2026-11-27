@@ -322,11 +322,6 @@
 .catalog .comparison-content table[data-items="3"] { min-width: 44rem; }
 .catalog .comparison-content table[data-items="4"] { min-width: 55rem; }
 .catalog dialog::backdrop { background: #211c206b; }
-.catalog .site-footer {
-  padding-block: .9rem 1.5rem;
-  border-top: 1px solid var(--edge);
-  font-size: .85rem;
-}
 
 @media (max-width: 58rem) {
   .catalog[data-view="business"] .catalog-layout { grid-template-columns: 1fr; }
@@ -502,7 +497,6 @@
 .catalog[data-view="search"] .product-footer > .card-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .catalog[data-view="search"] .product-footer > .card-actions > :is(.compare-toggle, a) { justify-content: center; text-align: center; padding-inline: .35rem; }
 .catalog .bundle-toggle { justify-self: start; padding: .5rem .68rem; }
-.catalog[data-view="search"] .site-footer { display: none; }
 
 @media (min-width: 62rem) {
   .catalog[data-view="search"] .search-followup { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }

@@ -4,6 +4,7 @@ from urllib.parse import urlencode
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 import json
+from uuid import uuid4
 
 import psycopg
 from psycopg.rows import dict_row
@@ -247,36 +248,34 @@ from app.procurement import purchase_values
 
 query = "антивирус для рабочих станций компании"
 matched = get("/search?" + urlencode({
-    "q": query, "platform": "windows", "term": "12", "track": "true", "demo": "true", "with_profile": "true",
+    "q": query, "platform": "windows", "term": "12",
 }))
 assert matched["results"], matched
 for item in matched["results"]:
     values = purchase_values(item["attributes"])
     assert "windows" in values["platform"] and "12" in values["term"], item
-miss = get("/search?" + urlencode({"q": query, "term": "119", "track": "true", "demo": "true"}))
+miss = get("/search?" + urlencode({"q": query, "term": "119"}))
 assert not miss["results"], miss
 assert miss["filter_diagnostics"]["conditions"]["term"]["would_restore"] > 0, miss
 
-assert get("/analytics/events/click", {"Content-Type": "application/json"}, json.dumps({
-    "request_id": matched["request_id"], "offer_id": matched["results"][0]["offer_id"],
-}).encode()) == 204
-try:
-    get("/analytics/report")
-except HTTPError as error:
-    assert error.code == 403
-else:
-    raise AssertionError("Отчёт доступен без ключа")
+offer_id = matched["results"][0]["offer_id"]
+popularity_url = "/search?" + urlencode({"q": offer_id, "with_popularity": "true"})
+before = get(popularity_url)["popularity"].get(offer_id, 0)
+visit = json.dumps({
+    "visit_id": str(uuid4()), "catalog_version": ready["catalog_version"], "offer_id": offer_id,
+}).encode()
+for _ in range(2):
+    assert get("/catalog/visits", {"Content-Type": "application/json"}, visit) == 204
+assert get(popularity_url)["popularity"][offer_id] == before + 1
 
-headers = {"X-Analytics-Token": os.environ["ANALYTICS_TOKEN"]}
-report = get("/analytics/report?demo=true", headers)
-assert report["metrics"]["searches"] == 2 and report["metrics"]["empty"] == 1, report
-assert report["metrics"]["direct_clicks"] == 1, report
-assert any(row["reason"] == "filter.term" for row in report["groups"]), report
-assert get("/analytics/report", headers)["metrics"]["searches"] == 0
-print("Проверены закупочные условия, причины промахов и отдельная статистика демо")
+for removed in ("/analytics/report", "/analytics.html"):
+    try:
+        get(removed)
+    except HTTPError as error:
+        assert error.code == 404
+    else:
+        raise AssertionError("Аналитика всё ещё доступна: " + removed)
 
-assert get("/analytics/report?demo=true&with_profile=true", headers)["metrics"]["searches"] == 1
-assert get("/analytics/report?demo=true&with_profile=false", headers)["metrics"]["empty"] == 1
 bundle = get("/bundle?" + urlencode({"offer_id": office_id, "catalog_version": ready["catalog_version"]}))
 assert bundle["anchor"]["offer_id"] == office_id and bundle["items"], bundle
 for item in bundle["items"]:

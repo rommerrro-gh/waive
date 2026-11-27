@@ -251,12 +251,8 @@ async function main() {
     await page.getByRole("link", {name: "К поиску по каталогу", exact: true}).click();
     assert.equal(await page.getByText("Список на согласование · 2").isVisible(), false);
     assert.equal(await input.inputValue(), process.env.BUNDLE_SMOKE_OFFER);
-    await page.goto(new URL("/analytics.html", page.url()).href);
-    await page.getByLabel("Ключ аналитики").fill(process.env.ANALYTICS_TOKEN);
-    await page.getByLabel("Только демо-запросы").check();
-    await page.getByRole("button", {name: "Обновить"}).click();
-    await page.getByRole("cell", {name: /Сузило выдачу условие «срок лицензии»/}).first().waitFor();
-    console.log("Проверены подсказки, сравнение, условия закупки и отчёт по демо-запросам");
+    assert.equal((await page.request.get(new URL("/analytics.html", page.url()).href)).status(), 404);
+    console.log("Проверены подсказки, сравнение, комплект и запрос КП");
   } finally {
     await browser.close();
   }

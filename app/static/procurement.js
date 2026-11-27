@@ -169,8 +169,8 @@ async function loadBundle(anchor, context) {
         : "В каталоге нет дополнений с подтверждённой совместимостью для этой позиции.";
     if (!data.items.length) return;
     const cards = [
-      productCard({...data.anchor, bundle_available: false}, undefined, context),
-      ...data.items.map(item => productCard(item, undefined, {...context, anchor: anchor.name})),
+      productCard({...data.anchor, bundle_available: false}, context),
+      ...data.items.map(item => productCard(item, {...context, anchor: anchor.name})),
     ];
     bundle.querySelector(".cards").replaceChildren(...cards);
   } catch (error) {

@@ -15,7 +15,6 @@ services:
   api:
     build: .
     environment:
-      ANALYTICS_TOKEN: ${ANALYTICS_TOKEN:-}
       DATABASE_URL: ${DATABASE_URL:?Укажите DATABASE_URL}
       QUOTE_RECIPIENT: ${QUOTE_RECIPIENT:-}
       SMTP_HOST: ${SMTP_HOST:-}

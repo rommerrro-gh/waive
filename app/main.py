@@ -7,17 +7,17 @@ from datetime import datetime
 from html import unescape
 from pathlib import Path
 from typing import Annotated, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from psycopg import OperationalError
+from psycopg import Error, OperationalError
 from psycopg.errors import QueryCanceled
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool, PoolTimeout
+from pydantic import BaseModel, Field
 
-from app.analytics import configured, record_search, router
 from app.catalog_browse import browse_offers, offer_popularity
 from app.e5_spelling import E5Spelling
 from app.procurement import LICENSE_TYPES, PLATFORMS, purchase_values, requested_filters
@@ -79,7 +79,6 @@ async def lifespan(app):
 
 
 app = FastAPI(title="Waive", lifespan=lifespan)
-app.include_router(router)
 app.include_router(quote_router)
 
 
@@ -208,23 +207,39 @@ def list_products(
         raise HTTPException(503, "Каталог временно недоступен") from error
 
 
+class CatalogVisit(BaseModel):
+    visit_id: UUID
+    offer_id: str = Field(min_length=1, max_length=100)
+    catalog_version: int = Field(gt=0)
+
+
+@app.post("/catalog/visits", status_code=204)
+def record_catalog_visit(visit: CatalogVisit):
+    try:
+        with app.state.pool.connection() as connection:
+            connection.execute("""
+                INSERT INTO offer_visit (visit_id, offer_id)
+                SELECT %s, o.id FROM active_catalog a JOIN offer o ON o.snapshot_id = a.snapshot_id
+                WHERE a.snapshot_id = %s AND o.id = %s
+                ON CONFLICT DO NOTHING
+            """, (visit.visit_id, visit.catalog_version, visit.offer_id))
+    except (Error, PoolTimeout):
+        logger.warning("Переход в карточку не записан")
+    return Response(status_code=204)
+
+
 @app.get("/search")
 def find_products(
     q: Annotated[str, Query(min_length=1, max_length=200)],
     filters: Annotated[dict, Depends(product_filters)],
     semantic: bool = True,
     expanded: bool = False,
-    track: bool = False,
-    demo: bool = False,
-    with_profile: bool = False,
     with_popularity: bool = False,
 ):
     query = " ".join(q.split())
     if len(query) < 2 or not any(char.isalnum() for char in query):
         raise HTTPException(422, "Введите название, бренд или артикул от двух символов")
     diagnostics = {}
-    request_id = uuid4()
-    track = track and configured()
     try:
         with app.state.pool.connection() as connection, connection.transaction():
             active = connection.execute("SELECT snapshot_id FROM active_catalog").fetchone()
@@ -290,10 +305,6 @@ def find_products(
                 ORDER BY name, id
             """, (snapshot, category_ids)).fetchall() if category_ids else []
             popularity = offer_popularity(connection, [item["offer_id"] for item in items]) if with_popularity else {}
-            if track:
-                track = record_search(
-                    connection, request_id, query, filters, diagnostics, items, recommendations, demo, with_profile,
-                )
     except (OperationalError, PoolTimeout, QueryCanceled) as error:
         raise HTTPException(503, "Поиск временно недоступен") from error
     available_items = [item for item in items if item["available"]] if alternatives else items
@@ -310,7 +321,7 @@ def find_products(
         "corrected_query": lookup if corrected else None,
         "spelling_suggestions": spellings,
         "filter_diagnostics": diagnostics if filters or diagnostics.get("requirements_unmet") else None,
-        "tracked": track,
+        "tracked": False,
         "clarification": (
             "Точного товара нет в наличии. Найдены альтернативы" if alternatives and not any(item["available"] for item in items) else
             "Точный артикул не найден" if catalog_identifier(query) and not items else
@@ -322,7 +333,7 @@ def find_products(
         ),
         "search_mode": "hybrid" if used_model else "lexical",
         "catalog_version": snapshot,
-        "request_id": str(request_id),
+        "request_id": str(uuid4()),
     }
 
 
