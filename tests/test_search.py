@@ -124,6 +124,16 @@ class TypoTests(unittest.TestCase):
         self.assertEqual((decision.lookup, decision.vendor), ("Cactus картридж 5.0", "Cactus"))
         embed.assert_called_once_with("query", ["кактус", "Cactus"], .4)
 
+    def test_vendor_candidates_include_close_pronunciation(self):
+        index = VendorSpellings(["Brother", "Canon", "Cactus", "Epson", "Macroscop"])
+        for query, vendor in (("бразер", "Brother"), ("брадер", "Brother"),
+                              ("братер", "Brother"), ("кэнон", "Canon")):
+            with self.subTest(query=query):
+                self.assertEqual(index.candidates(query + " принтер"), (query, " принтер", [vendor], True))
+        self.assertEqual(index.candidates("землекоп")[2], [])
+        self.assertEqual(index.candidates("микроскоп")[2], [])
+        self.assertEqual(index.candidates("AB123")[2], [])
+
     def test_vendor_ranking_filters_weak_matches(self):
         embed = Mock(return_value=("current", [[1., 0.], [.1, .995], [1., 0.]]))
         speller = E5Spelling({}, "current", embed)

@@ -5,6 +5,7 @@ from html import unescape
 from app.procurement import filter_offers, positive_query
 from app.relations import alternative_difference, category_coverage, comparable_offer, compatibility_evidence
 from app.requirements import catalog_os, check_requirement, parse_requirements, unmet_requirements
+from app.vendor_spellings import FIT_REFERENCE
 from app.spelling import clear_winner, rank_spellings
 
 NORMALIZATIONS = (
@@ -847,6 +848,7 @@ class QueryResolution:
     lexical: list
     choices: list[str] = field(default_factory=list)
     vendor: str | None = None
+    compatibility: str | None = None
 
 
 def spelling_matches(connection, snapshot, label):
@@ -859,9 +861,35 @@ def spelling_matches(connection, snapshot, label):
     return [row for row in rows if vendor_matches(row, brand)]
 
 
+def compatible_offers(connection, snapshot, brand, suffix):
+    return connection.execute("""
+        SELECT o.id AS offer_id, o.vendor_code, o.group_id, o.category_id, o.name, o.vendor,
+               o.url, o.price, o.currency, o.available, o.attributes, left(o.description, 1200) AS description,
+               false AS exact
+        FROM offer o CROSS JOIN LATERAL regexp_matches(o.name, %(pattern)s, 'i') AS matched
+        WHERE o.snapshot_id = %(snapshot)s AND o.available AND o.attributes ->> 'Тип продукта' = 'электроника'
+          AND lower(matched[1]) = lower(%(brand)s)
+          AND (%(suffix)s = '' OR
+               to_tsvector('russian', CASE WHEN %(has_cyrillic)s
+                   THEN regexp_replace(o.name, %(pattern)s || '.*$', '', 'i') ELSE o.name END)
+                   @@ plainto_tsquery('russian', %(suffix)s))
+        ORDER BY o.id LIMIT 100
+    """, {"snapshot": snapshot, "pattern": FIT_REFERENCE, "brand": brand, "suffix": suffix.strip(" ,"),
+          "has_cyrillic": bool(re.search(r"[а-яё]", suffix, re.I))}).fetchall()
+
+
 def resolve_catalog_query(connection, snapshot, query, *, prefixes=None, speller=None,
                           vendor_index=None, complete_vendor=False):
     lookup = resolve_search_input(query)
+    latin_head = re.match(r"[A-Za-z][A-Za-z0-9-]{2,24}(?!\w)", lookup)
+    if (speller and vendor_index and latin_head and not catalog_identifier(query)
+            and normal_form(lookup) == normal_form(query)):
+        index = vendor_index(connection, snapshot)
+        reference = index.compatible.get(latin_head[0].casefold())
+        if reference:
+            suffix = lookup[latin_head.end():]
+            rows = compatible_offers(connection, snapshot, reference, suffix)
+            return QueryResolution(reference + suffix, rows, compatibility=reference)
     lexical = lexical_candidates(connection, snapshot, lookup, allow_fuzzy=False)
     if lexical or lookup.casefold() != normalize_search_aliases(query).casefold() or catalog_identifier(query):
         return QueryResolution(lookup, lexical)
@@ -874,20 +902,25 @@ def resolve_catalog_query(connection, snapshot, query, *, prefixes=None, speller
         prefixes = suggest_families(connection, snapshot, query)
     completions = [name for name in prefixes if name.casefold().startswith(query.casefold())]
     if speller and vendor_index and not completions and re.match(r"[а-яё]{4}", query, re.I):
-        head, suffix, candidates, exact = vendor_index(connection, snapshot).candidates(
-            query, complete_prefix=complete_vendor,
-        )
+        index = vendor_index(connection, snapshot)
+        head, suffix, candidates, exact = index.candidates(query, complete_prefix=complete_vendor)
         ranked_vendors = speller.rank_vendors(head, candidates)
         matches = []
         for score, vendor in ranked_vendors[:6]:
             label = vendor + suffix
+            if vendor.casefold() in index.compatible:
+                rows = compatible_offers(connection, snapshot, vendor, suffix)
+                matches.append((score, vendor, label, rows, True))
+                continue
             rows = [row for row in lexical_candidates(connection, snapshot, label, allow_fuzzy=False)
                     if normal_form(row["vendor"] or "") == normal_form(vendor)]
             if rows:
-                matches.append((score, vendor, label, rows))
+                matches.append((score, vendor, label, rows, False))
         if matches:
-            score, vendor, label, rows = matches[0]
+            score, vendor, label, rows, compatible = matches[0]
             if exact and (len(matches) == 1 or score - matches[1][0] >= .025):
+                if compatible:
+                    return QueryResolution(label, rows, compatibility=vendor)
                 return QueryResolution(label, rows, vendor=vendor)
             return QueryResolution(lookup, lexical, [item[2] for item in matches])
 

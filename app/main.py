@@ -22,7 +22,7 @@ from app.catalog_browse import browse_offers, offer_popularity
 from app.e5_spelling import E5Spelling
 from app.procurement import LICENSE_TYPES, PLATFORMS, purchase_values, requested_filters
 from app.quote import router as quote_router
-from app.vendor_spellings import VendorSpellings
+from app.vendor_spellings import FIT_REFERENCE, VendorSpellings
 from app.requirements import parse_requirements, retrieval_query
 from app.embeddings import vector_literal, vectors
 from app.search import (
@@ -101,7 +101,13 @@ def snapshot_vendor_spellings(connection, snapshot):
         WHERE snapshot_id = %s AND vendor IS NOT NULL AND available
         ORDER BY vendor
     """, (snapshot,))
-    spellings = VendorSpellings(row["vendor"] for row in names)
+    compatible = connection.execute("""
+        SELECT DISTINCT ON (lower(matched[1])) matched[1] AS brand
+        FROM offer CROSS JOIN LATERAL regexp_matches(name, %s, 'ig') AS matched
+        WHERE snapshot_id = %s AND available AND attributes ->> 'Тип продукта' = 'электроника'
+        ORDER BY lower(matched[1]), matched[1]
+    """, (FIT_REFERENCE, snapshot))
+    spellings = VendorSpellings((row["vendor"] for row in names), (row["brand"] for row in compatible))
     app.state.vendor_spellings = {snapshot: spellings}
     return spellings
 
@@ -139,7 +145,9 @@ def suggest(q: Annotated[str, Query(max_length=120)]):
                     vendor_index=snapshot_vendor_spellings, complete_vendor=True,
                 )
                 items = decision.choices
-                if decision.lexical:
+                if decision.compatibility:
+                    items = [decision.lookup]
+                elif decision.lexical:
                     if decision.lookup.casefold() != query.casefold() or decision.lookup.casefold() in BRAND_BY_NAME:
                         items = [decision.lookup, *suggest_families(connection, snapshot, decision.lookup)]
                     else:
@@ -221,7 +229,7 @@ def find_products(
             lookup, lexical, spellings = decision.lookup, decision.lexical, decision.choices
             vendor = decision.vendor
             intent = retrieval_query(lookup) if parse_requirements(lookup) else lookup
-            if intent != lookup and not spellings and not any(item["exact"] for item in lexical):
+            if intent != lookup and not decision.compatibility and not spellings and not any(item["exact"] for item in lexical):
                 narrowed = resolve_catalog_query(
                     connection, snapshot, intent, speller=app.state.speller, vendor_index=snapshot_vendor_spellings,
                 )
@@ -239,7 +247,7 @@ def find_products(
             revision = os.environ.get("MODEL_REVISION")
             indexed = None
             allow_semantic = not spellings and (lexical or len(query.split()) >= 3)
-            if (semantic and allow_semantic and not brand_only and not catalog_identifier(query)
+            if (semantic and allow_semantic and not decision.compatibility and not brand_only and not catalog_identifier(query)
                     and not any(item["exact"] for item in lexical) and revision and os.environ.get("EMBEDDING_URL")):
                 indexed = connection.execute("""
                     SELECT 1 FROM semantic_catalog WHERE snapshot_id = %s AND model_revision = %s
@@ -253,6 +261,9 @@ def find_products(
                 connection, snapshot, lookup, lexical, semantic_rows, filters, diagnostics,
                 expanded=expanded, coverage=snapshot_coverage(connection, snapshot), intent_query=intent, vendor=vendor,
             )
+            if decision.compatibility:
+                for item in items:
+                    item["reason"] = "Совместимость указана в названии товара: " + decision.compatibility
             category_ids = sorted({item["category_id"] for item in items if item["category_id"]})
             result_categories = connection.execute("""
                 SELECT id, name FROM category
@@ -286,6 +297,7 @@ def find_products(
             "Точный артикул не найден" if catalog_identifier(query) and not items else
             "Товар найден, но сейчас недоступен. Подтверждённых аналогов нет" if items and not any(item["available"] for item in items) else
             "По заданным условиям подходящие предложения не подтверждены" if (filters or diagnostics.get("requirements_unmet")) and not items else
+            "Подходящих товаров с указанной совместимостью не найдено" if decision.compatibility and not items else
             "Уточните название, бренд или артикул" if not items else
             "Найдено меньше четырёх подходящих семейств" if len(items) + len(recommendations) < 4 else None
         ),

@@ -133,7 +133,8 @@ if os.getenv("EMBEDDING_URL"):
     spelling_choices.append(("адинэсс", "AnyDesk"))
     for query, brand, suffix in (("кактус", "Cactus", ""), ("кактус картридж", "Cactus", " картридж"),
                                  ("леново ноутбук", "Lenovo", " ноутбук"), ("эпсон принтер", "Epson", " принтер"),
-                                 ("самсунг монитор", "Samsung", " монитор"), ("киосера мфу", "Kyocera", " мфу")):
+                                 ("самсунг монитор", "Samsung", " монитор"), ("киосера мфу", "Kyocera", " мфу"),
+                                 ("кэнон картридж", "Canon", " картридж")):
         params = urlencode({"q": query, "expanded": "true"})
         expected = (brand + suffix).casefold()
         suggestions = get("/suggest?" + params)["suggestions"]
@@ -142,6 +143,15 @@ if os.getenv("EMBEDDING_URL"):
         assert (matched["corrected_query"] or "").casefold() == expected, (query, matched["corrected_query"])
         assert matched["results"] and all(card["vendor"].casefold() == brand.casefold()
                                           for card in matched["results"]), query
+    for query, expected in (("бразер", "Brother"), ("бразер картридж", "Brother картридж")):
+        params = urlencode({"q": query, "expanded": "true"})
+        assert get("/suggest?" + params)["suggestions"][0] == expected
+        matched = get("/search?" + params)
+        assert matched["corrected_query"] == expected and matched["results"]
+        assert all("для brother" in card["name"].casefold() and card["vendor"] == "Cactus"
+                   for card in matched["results"])
+    no_printer = get("/search?" + urlencode({"q": "бразер принтер"}))
+    assert no_printer["corrected_query"] == "Brother принтер" and not no_printer["results"]
 for query, label in spelling_choices:
     params = urlencode({"q": query})
     repaired = get("/search?" + params)
