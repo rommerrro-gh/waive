@@ -481,13 +481,14 @@
   font-size: clamp(1rem, 1.55vw, 1.22rem);
 }
 .catalog[data-view="search"] #query-correction strong { color: var(--ink); }
-.catalog[data-view="search"] #search { display: contents; }
-.catalog[data-view="search"] main {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+@media (width < 62rem) {
+  .catalog[data-view="search"] #search { display: contents; }
+  .catalog[data-view="search"] main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .catalog[data-view="search"] .catalog-controls { margin-block: 1.5rem 1.1rem; }
 }
-.catalog[data-view="search"] :is(h1, .search-box, .search-followup, #filter-suggestions) { grid-column: 1 / -1; }
-.catalog[data-view="search"] .catalog-controls { margin-block: 1.5rem 1.1rem; }
 .catalog[data-view="search"] #filter-title { padding-bottom: .9rem; }
 .catalog[data-view="search"] .catalog-layout { min-width: 0; }
 .catalog[data-view="search"] #status { color: var(--ink); font-size: 1.15rem; font-weight: 700; }

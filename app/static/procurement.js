@@ -101,7 +101,7 @@ function isBusinessView() {
 function updateView({focus = false, initial = false} = {}) {
   const business = isBusinessView();
   document.body.dataset.view = business ? "business" : "search";
-  document.querySelector(".license-filters").open = business;
+  document.querySelector(".license-filters").open = false;
   pageTitle.textContent = business ? "Закупки для бизнеса" : "Поиск по каталогу Softline";
   document.title = "Waive | " + pageTitle.textContent;
   businessProfile.hidden = businessApproval.hidden = backToSearch.hidden = !business;

@@ -12,6 +12,17 @@ async function main() {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     page.on("pageerror", error => { throw error; });
     await page.goto(new URL("/?demo=true", process.env.WAIVE_TEST_URL || "http://127.0.0.1:8000").href);
+    const licenses = page.locator(".license-filters");
+    assert.equal(await licenses.getAttribute("open"), null);
+    await page.setViewportSize({width: 1440, height: 900});
+    const main = await page.locator("main").boundingBox();
+    const searchBox = await page.locator(".search-box").boundingBox();
+    const sidebar = await page.locator(".catalog-controls").boundingBox();
+    const resultsLayout = await page.locator(".catalog-layout").boundingBox();
+    assert.ok(searchBox.width > main.width * 0.95, "Поле поиска занимает всю ширину");
+    assert.ok(sidebar.width > 200 && sidebar.x + sidebar.width < resultsLayout.x,
+      "Фильтры и карточки занимают отдельные колонки");
+    await page.setViewportSize({width: 390, height: 844});
     const input = page.getByRole("combobox", {name: "Название, бренд или артикул"});
     assert.equal(await input.getAttribute("aria-describedby"), "search-help");
     await page.getByText(/Начните вводить название или артикул/).waitFor();
@@ -182,11 +193,14 @@ async function main() {
     assert.equal(await page.locator("select[name=term]").inputValue(), "12");
     await page.getByRole("link", {name: "Закупки для бизнеса", exact: true}).click();
     await page.waitForURL("**/business?demo=true");
+    assert.equal(await licenses.getAttribute("open"), null);
+    await licenses.locator("summary").click();
     assert.equal(await input.inputValue(), "антивирус для рабочих станций на год");
     await page.locator("select[name=platform]").selectOption("windows");
     await page.getByRole("spinbutton", {name: "Рабочих мест"}).fill("50");
     await page.getByRole("button", {name: "Сохранить профиль закупки"}).click();
     await page.reload();
+    assert.equal(await licenses.getAttribute("open"), null);
     assert.equal(await page.locator("select[name=platform]").inputValue(), "windows");
     assert.equal(await page.getByRole("spinbutton", {name: "Рабочих мест"}).inputValue(), "50");
     await input.fill("антивирус для рабочих станций");
@@ -226,6 +240,7 @@ async function main() {
     await page.getByText("Запрос отправлен.", {exact: true}).waitFor();
     assert.equal(sent.items[0].workplaces, 50);
     assert.equal(sent.email, "anna@example.test");
+    await licenses.locator("summary").click();
     await page.locator("select[name=platform]").selectOption("linux");
     await input.fill("офисный пакет");
     assert.equal(await page.locator("select[name=platform]").inputValue(), "windows");
@@ -234,6 +249,7 @@ async function main() {
     assert.ok(process.env.BUNDLE_SMOKE_OFFER);
     await page.getByRole("button", {name: "Удалить профиль"}).click();
     await page.getByRole("spinbutton", {name: "Рабочих мест"}).fill("");
+    await licenses.locator("summary").click();
     await page.locator("select[name=platform]").selectOption("");
     await page.locator("select[name=term]").selectOption("");
     await input.fill(process.env.BUNDLE_SMOKE_OFFER);
