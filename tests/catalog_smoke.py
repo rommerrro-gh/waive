@@ -131,6 +131,17 @@ spelling_choices = [("мимкосотф", "Microsoft"), ("вмнвэар", "VMw
                     ("криптограф", "КриптоПро"), ("логотека", "Logitech"), ("автодиски", "Autodesk")]
 if os.getenv("EMBEDDING_URL"):
     spelling_choices.append(("адинэсс", "AnyDesk"))
+    for query, brand, suffix in (("кактус", "Cactus", ""), ("кактус картридж", "Cactus", " картридж"),
+                                 ("леново ноутбук", "Lenovo", " ноутбук"), ("эпсон принтер", "Epson", " принтер"),
+                                 ("самсунг монитор", "Samsung", " монитор"), ("киосера мфу", "Kyocera", " мфу")):
+        params = urlencode({"q": query, "expanded": "true"})
+        expected = (brand + suffix).casefold()
+        suggestions = get("/suggest?" + params)["suggestions"]
+        assert suggestions and suggestions[0].casefold() == expected, (query, suggestions)
+        matched = get("/search?" + params)
+        assert (matched["corrected_query"] or "").casefold() == expected, (query, matched["corrected_query"])
+        assert matched["results"] and all(card["vendor"].casefold() == brand.casefold()
+                                          for card in matched["results"]), query
 for query, label in spelling_choices:
     params = urlencode({"q": query})
     repaired = get("/search?" + params)

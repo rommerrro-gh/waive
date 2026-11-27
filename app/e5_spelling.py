@@ -46,6 +46,20 @@ class E5Spelling:
         finally:
             self._initializing.release()
 
+    def rank_vendors(self, head, candidates):
+        if not candidates or not self._encoding.acquire(blocking=False):
+            return []
+        try:
+            source, *embeddings = self._encode([head, *candidates])
+            scored = [(cosine(source, vector), candidate)
+                      for candidate, vector in zip(candidates, embeddings, strict=True)]
+            return sorted((item for item in scored if item[0] >= .85), reverse=True)
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            logger.debug("Не удалось оценить производителей через E5 (%s)", type(error).__name__)
+            return []
+        finally:
+            self._encoding.release()
+
     def suggest(self, query, labels):
         leading, separator, suffix = query.partition(" ")
         aliases_allowed = 6 <= len(leading) <= 22 and leading.isalpha()

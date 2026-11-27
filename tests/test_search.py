@@ -5,6 +5,7 @@ from app.e5_spelling import E5Spelling
 from app.relations import category_coverage, comparable_offer, compatibility_evidence
 from app.requirements import parse_requirements, unmet_requirements
 from app.spelling import clear_winner, rank_spellings
+from app.vendor_spellings import VendorSpellings
 
 from app.search import (
     as_card, is_kaspersky_query, matches_product_variant, matching_version, merge_candidates,
@@ -103,6 +104,30 @@ class TypoTests(unittest.TestCase):
         self.assertEqual(speller.suggest("землекоп", []), [])
         self.assertEqual(speller.suggest("KL8072RMZZZ", []), [])
         self.assertTrue(all(call.args[0] == "query" for call in embed.call_args_list))
+
+    def test_catalog_vendor_candidates_require_e5_and_keep_the_suffix(self):
+        index = VendorSpellings(["Cactus", "Canon", "Dell Technologies", "Kyocera", "Panasonic"])
+        self.assertEqual(index.candidates("кактус, картридж 5.0"),
+                         ("кактус", ", картридж 5.0", ["Cactus"], True))
+        self.assertEqual(index.candidates("какту", complete_prefix=True),
+                         ("какту", "", ["Cactus"], False))
+        self.assertEqual(index.candidates("делл монитор")[2], ["Dell Technologies"])
+        self.assertEqual(index.candidates("киосера")[2], ["Kyocera"])
+        embed = Mock(return_value=("current", [[1., 0.], [1., 0.]]))
+        speller = E5Spelling({}, "current", embed)
+        item = {"vendor": "Cactus"}
+        with patch("app.search.lexical_candidates", side_effect=[[], [item]]):
+            decision = resolve_catalog_query(
+                None, 1, "кактус картридж 5.0", prefixes=[], speller=speller,
+                vendor_index=lambda *_: index,
+            )
+        self.assertEqual((decision.lookup, decision.vendor), ("Cactus картридж 5.0", "Cactus"))
+        embed.assert_called_once_with("query", ["кактус", "Cactus"], .4)
+
+    def test_vendor_ranking_filters_weak_matches(self):
+        embed = Mock(return_value=("current", [[1., 0.], [.1, .995], [1., 0.]]))
+        speller = E5Spelling({}, "current", embed)
+        self.assertEqual(speller.rank_vendors("канон", ["Kanon", "Canon"]), [(1.0, "Canon")])
 
     def test_multiple_edits_and_ambiguity(self):
         ranked = rank_spellings("каспрсикй", [("Kaspersky", "касперский"), ("Cactus", "кактус")])

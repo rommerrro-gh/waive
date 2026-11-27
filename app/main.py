@@ -22,6 +22,7 @@ from app.catalog_browse import browse_offers, offer_popularity
 from app.e5_spelling import E5Spelling
 from app.procurement import LICENSE_TYPES, PLATFORMS, purchase_values, requested_filters
 from app.quote import router as quote_router
+from app.vendor_spellings import VendorSpellings
 from app.requirements import parse_requirements, retrieval_query
 from app.embeddings import vector_literal, vectors
 from app.search import (
@@ -68,6 +69,7 @@ async def lifespan(app):
         app.state.pool = pool
         app.state.executor = executor
         app.state.coverage = {}
+        app.state.vendor_spellings = {}
         revision = os.environ.get("MODEL_REVISION")
         speller = E5Spelling(SPELLING_ALIASES, revision) if revision and os.environ.get("EMBEDDING_URL") else None
         app.state.speller = speller
@@ -88,6 +90,20 @@ def snapshot_coverage(connection, snapshot):
     calculated = load_category_coverage(connection, snapshot)
     app.state.coverage = {snapshot: calculated}
     return calculated
+
+
+def snapshot_vendor_spellings(connection, snapshot):
+    cached = app.state.vendor_spellings.get(snapshot)
+    if cached is not None:
+        return cached
+    names = connection.execute("""
+        SELECT DISTINCT vendor FROM offer
+        WHERE snapshot_id = %s AND vendor IS NOT NULL AND available
+        ORDER BY vendor
+    """, (snapshot,))
+    spellings = VendorSpellings(row["vendor"] for row in names)
+    app.state.vendor_spellings = {snapshot: spellings}
+    return spellings
 
 
 @app.get("/health")
@@ -118,7 +134,10 @@ def suggest(q: Annotated[str, Query(max_length=120)]):
             items = suggest_families(connection, active["snapshot_id"], query) if active else []
             if active and not items:
                 snapshot = active["snapshot_id"]
-                decision = resolve_catalog_query(connection, snapshot, query, prefixes=items, speller=app.state.speller)
+                decision = resolve_catalog_query(
+                    connection, snapshot, query, prefixes=items, speller=app.state.speller,
+                    vendor_index=snapshot_vendor_spellings, complete_vendor=True,
+                )
                 items = decision.choices
                 if decision.lexical:
                     if decision.lookup.casefold() != query.casefold() or decision.lookup.casefold() in BRAND_BY_NAME:
@@ -196,11 +215,17 @@ def find_products(
             if not active:
                 raise HTTPException(503, "Каталог готовится")
             snapshot = active["snapshot_id"]
-            decision = resolve_catalog_query(connection, snapshot, query, speller=app.state.speller)
+            decision = resolve_catalog_query(
+                connection, snapshot, query, speller=app.state.speller, vendor_index=snapshot_vendor_spellings,
+            )
             lookup, lexical, spellings = decision.lookup, decision.lexical, decision.choices
+            vendor = decision.vendor
             intent = retrieval_query(lookup) if parse_requirements(lookup) else lookup
             if intent != lookup and not spellings and not any(item["exact"] for item in lexical):
-                narrowed = resolve_catalog_query(connection, snapshot, intent, speller=app.state.speller)
+                narrowed = resolve_catalog_query(
+                    connection, snapshot, intent, speller=app.state.speller, vendor_index=snapshot_vendor_spellings,
+                )
+                vendor = vendor or narrowed.vendor
                 existing = {item["offer_id"] for item in lexical}
                 lexical.extend(item for item in narrowed.lexical if item["offer_id"] not in existing)
                 if not lexical:
@@ -209,7 +234,8 @@ def find_products(
                     lookup = narrowed.lookup + lookup[len(intent):]
                 intent = narrowed.lookup
             corrected = lookup.casefold() != query.casefold()
-            brand_only = is_kaspersky_query(lookup) or (corrected and lookup.casefold() in BRAND_BY_NAME)
+            brand_only = (is_kaspersky_query(lookup) or (corrected and lookup.casefold() in BRAND_BY_NAME)
+                          or (vendor and vendor.casefold() == lookup.casefold()))
             revision = os.environ.get("MODEL_REVISION")
             indexed = None
             allow_semantic = not spellings and (lexical or len(query.split()) >= 3)
@@ -220,9 +246,12 @@ def find_products(
                 """, (snapshot, revision)).fetchone()
             future = request_vector(app.state.executor, intent) if indexed else None
             semantic_rows, used_model = semantic_candidates(connection, future, snapshot, revision)
+            if vendor:
+                lexical_ids = {item["offer_id"] for item in lexical}
+                semantic_rows = [item for item in semantic_rows if item["offer_id"] in lexical_ids]
             items, alternatives, recommendations = assemble_results(
                 connection, snapshot, lookup, lexical, semantic_rows, filters, diagnostics,
-                expanded=expanded, coverage=snapshot_coverage(connection, snapshot), intent_query=intent,
+                expanded=expanded, coverage=snapshot_coverage(connection, snapshot), intent_query=intent, vendor=vendor,
             )
             category_ids = sorted({item["category_id"] for item in items if item["category_id"]})
             result_categories = connection.execute("""

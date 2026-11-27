@@ -572,7 +572,7 @@ def named_families(connection, snapshot, intent, lexical):
 
 
 def assemble_results(connection, snapshot, query, lexical, semantic, filters=None, diagnostics=None, *,
-                     expanded=False, coverage=None, intent_query=None):
+                     expanded=False, coverage=None, intent_query=None, vendor=None):
     versions = set(VERSION.findall(query))
     # Длинные формулировки чаще описывают задачу. Версия и артикул сохраняют приоритет.
     natural_language = len(query.split()) >= 5 and not versions
@@ -595,6 +595,8 @@ def assemble_results(connection, snapshot, query, lexical, semantic, filters=Non
                 and (not vpn or vpn_offer(item, query)))
 
     def matches(item):
+        if vendor and normal_form(item["vendor"] or "") != normal_form(vendor):
+            return False
         if item["exact"]:
             return True
         return (matches_purpose(item)
@@ -844,6 +846,7 @@ class QueryResolution:
     lookup: str
     lexical: list
     choices: list[str] = field(default_factory=list)
+    vendor: str | None = None
 
 
 def spelling_matches(connection, snapshot, label):
@@ -856,7 +859,8 @@ def spelling_matches(connection, snapshot, label):
     return [row for row in rows if vendor_matches(row, brand)]
 
 
-def resolve_catalog_query(connection, snapshot, query, *, prefixes=None, speller=None):
+def resolve_catalog_query(connection, snapshot, query, *, prefixes=None, speller=None,
+                          vendor_index=None, complete_vendor=False):
     lookup = resolve_search_input(query)
     lexical = lexical_candidates(connection, snapshot, lookup, allow_fuzzy=False)
     if lexical or lookup.casefold() != normalize_search_aliases(query).casefold() or catalog_identifier(query):
@@ -869,6 +873,24 @@ def resolve_catalog_query(connection, snapshot, query, *, prefixes=None, speller
     if prefixes is None:
         prefixes = suggest_families(connection, snapshot, query)
     completions = [name for name in prefixes if name.casefold().startswith(query.casefold())]
+    if speller and vendor_index and not completions and re.match(r"[а-яё]{4}", query, re.I):
+        head, suffix, candidates, exact = vendor_index(connection, snapshot).candidates(
+            query, complete_prefix=complete_vendor,
+        )
+        ranked_vendors = speller.rank_vendors(head, candidates)
+        matches = []
+        for score, vendor in ranked_vendors[:6]:
+            label = vendor + suffix
+            rows = [row for row in lexical_candidates(connection, snapshot, label, allow_fuzzy=False)
+                    if normal_form(row["vendor"] or "") == normal_form(vendor)]
+            if rows:
+                matches.append((score, vendor, label, rows))
+        if matches:
+            score, vendor, label, rows = matches[0]
+            if exact and (len(matches) == 1 or score - matches[1][0] >= .025):
+                return QueryResolution(label, rows, vendor=vendor)
+            return QueryResolution(lookup, lexical, [item[2] for item in matches])
+
     ranked = [(0, name) for name in completions] if completions else catalog_spelling_options(connection, snapshot, query)
     confirmed = [(score, label, rows) for score, label in ranked
                  if (rows := spelling_matches(connection, snapshot, label))]
