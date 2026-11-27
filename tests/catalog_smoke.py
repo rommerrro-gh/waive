@@ -106,8 +106,11 @@ for query, label in (("качпеоский", "Kaspersky"), ("криппопро
     assert get("/suggest?" + params)["suggestions"][0].casefold() == label.casefold(), query
     repaired = get("/search?" + params)
     assert repaired["corrected_query"].casefold() == label.casefold() and repaired["results"], repaired
-for query, label in (("мимкосотф", "Microsoft"), ("адинэсс", "AnyDesk"), ("вмнвэар", "VMware"),
-                     ("криптограф", "КриптоПро"), ("логотека", "Logitech"), ("автодиски", "Autodesk")):
+spelling_choices = [("мимкосотф", "Microsoft"), ("вмнвэар", "VMware"),
+                    ("криптограф", "КриптоПро"), ("логотека", "Logitech"), ("автодиски", "Autodesk")]
+if os.getenv("EMBEDDING_URL"):
+    spelling_choices.append(("адинэсс", "AnyDesk"))
+for query, label in spelling_choices:
     params = urlencode({"q": query})
     repaired = get("/search?" + params)
     assert repaired["corrected_query"] is None and label in repaired["spelling_suggestions"], repaired

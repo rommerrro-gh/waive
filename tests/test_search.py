@@ -1,10 +1,7 @@
-import gzip
 import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
-from app.brand_recovery import load_model, recover_brand
+from app.e5_spelling import E5Spelling
 from app.relations import category_coverage, comparable_offer, compatibility_evidence
 from app.requirements import parse_requirements, unmet_requirements
 from app.spelling import clear_winner, rank_spellings
@@ -73,21 +70,14 @@ class IntentTests(unittest.TestCase):
 
 class TypoTests(unittest.TestCase):
     def test_unusable_model_leaves_catalog_repair_operational(self):
-        self.addCleanup(load_model.cache_clear)
-        with TemporaryDirectory() as directory:
-            path = Path(directory) / "weights.json.gz"
-            for payload in (None, b"not gzip", gzip.compress(b"invalid json"), gzip.compress(b"{}")):
-                if payload is not None:
-                    path.write_bytes(payload)
-                load_model.cache_clear()
-                with self.subTest(payload=payload), patch("app.brand_recovery.MODEL_PATH", path), \
-                        self.assertLogs("app.brand_recovery", level="WARNING") as logs, \
-                        patch("app.search.catalog_spelling_options", return_value=[(8, "Kaspersky")]), \
-                        patch("app.search.lexical_candidates", side_effect=[[], [{"vendor": "Kaspersky"}]]):
-                    self.assertIsNone(load_model())
-                    decision = resolve_catalog_query(None, 1, "Kaspreskky", prefixes=[])
-                    self.assertEqual(decision.lookup, "Kaspersky")
-                    self.assertEqual(len(logs.output), 1)
+        for embed in (Mock(side_effect=TimeoutError), Mock(return_value=("old", []))):
+            with self.subTest(embed=embed), \
+                    patch("app.search.catalog_spelling_options", return_value=[(8, "Kaspersky")]), \
+                    patch("app.search.lexical_candidates", side_effect=[[], [{"vendor": "Kaspersky"}]]):
+                speller = E5Spelling({}, "current", embed)
+                decision = resolve_catalog_query(None, 1, "Kaspreskky", prefixes=[], speller=speller)
+                self.assertEqual(decision.lookup, "Kaspersky")
+                embed.assert_called_once()
 
     def test_vpn_normalization_keeps_surrounding_words(self):
         self.assertEqual(resolve_search_input("ВПН"), "VPN")
@@ -106,15 +96,13 @@ class TypoTests(unittest.TestCase):
         self.assertTrue(vpn_offer({"name": "ViPNet Client"}, "VPN"))
         self.assertFalse(vpn_offer({"name": "ViPNet Client", "vendor": "ИнфоТеКС"}, "Kaspersky VPN"))
 
-    def test_trained_model_recovers_brands_without_catalog_candidates(self):
-        for query, brand in (("качпеоский", "Kaspersky"), ("мимкосотф", "Microsoft"), ("адинэсс", "AnyDesk")):
-            with self.subTest(query=query):
-                self.assertEqual(recover_brand(query), brand)
-
-    def test_brand_model_abstains_on_unrelated_words_and_identifiers(self):
-        for query in ("микроскоп", "каспийское", "космический", "КриптоПро CSP 5.0", "KL8072RMZZZ"):
-            with self.subTest(query=query):
-                self.assertIsNone(recover_brand(query))
+    def test_e5_recovers_a_catalog_brand_and_preserves_version(self):
+        embed = Mock(side_effect=lambda kind, names, timeout: ("current", [[1.0, 0.0] for name in names]))
+        speller = E5Spelling({"AnyDesk": ("анидэск", "энидэск", "ани деск")}, "current", embed)
+        self.assertEqual(speller.suggest("адинэсс VPN 5.0", []), ["AnyDesk VPN 5.0"])
+        self.assertEqual(speller.suggest("землекоп", []), [])
+        self.assertEqual(speller.suggest("KL8072RMZZZ", []), [])
+        self.assertTrue(all(call.args[0] == "query" for call in embed.call_args_list))
 
     def test_multiple_edits_and_ambiguity(self):
         ranked = rank_spellings("каспрсикй", [("Kaspersky", "касперский"), ("Cactus", "кактус")])

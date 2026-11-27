@@ -17,13 +17,13 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool, PoolTimeout
 
 from app.analytics import configured, record_search, router
-from app.brand_recovery import load_model
+from app.e5_spelling import E5Spelling
 from app.procurement import LICENSE_TYPES, PLATFORMS, purchase_values, requested_filters
 from app.quote import router as quote_router
 from app.requirements import parse_requirements, retrieval_query
 from app.embeddings import vector_literal, vectors
 from app.search import (
-    BRAND_BY_NAME, SEMANTIC_OFFERS, as_card, assemble_results, catalog_identifier, load_category_coverage,
+    BRAND_BY_NAME, SEMANTIC_OFFERS, SPELLING_ALIASES, as_card, assemble_results, catalog_identifier, load_category_coverage,
     is_kaspersky_query, recommend_for_anchor, resolve_catalog_query, suggest_families,
 )
 
@@ -58,7 +58,6 @@ def semantic_candidates(connection, future, snapshot, revision):
 
 @asynccontextmanager
 async def lifespan(app):
-    load_model()
     with ConnectionPool(
         os.environ["DATABASE_URL"], min_size=0, max_size=8, timeout=2,
         kwargs={"row_factory": dict_row, "autocommit": True, "options": "-c statement_timeout=1800"},
@@ -67,6 +66,11 @@ async def lifespan(app):
         app.state.pool = pool
         app.state.executor = executor
         app.state.coverage = {}
+        revision = os.environ.get("MODEL_REVISION")
+        speller = E5Spelling(SPELLING_ALIASES, revision) if revision and os.environ.get("EMBEDDING_URL") else None
+        app.state.speller = speller
+        if speller:
+            executor.submit(speller.prepare)
         yield
 
 
@@ -112,7 +116,7 @@ def suggest(q: Annotated[str, Query(max_length=120)]):
             items = suggest_families(connection, active["snapshot_id"], query) if active else []
             if active and not items:
                 snapshot = active["snapshot_id"]
-                decision = resolve_catalog_query(connection, snapshot, query, prefixes=items)
+                decision = resolve_catalog_query(connection, snapshot, query, prefixes=items, speller=app.state.speller)
                 items = decision.choices
                 if decision.lexical:
                     if decision.lookup.casefold() != query.casefold() or decision.lookup.casefold() in BRAND_BY_NAME:
@@ -158,11 +162,11 @@ def find_products(
             if not active:
                 raise HTTPException(503, "Каталог готовится")
             snapshot = active["snapshot_id"]
-            decision = resolve_catalog_query(connection, snapshot, query)
+            decision = resolve_catalog_query(connection, snapshot, query, speller=app.state.speller)
             lookup, lexical, spellings = decision.lookup, decision.lexical, decision.choices
             intent = retrieval_query(lookup) if parse_requirements(lookup) else lookup
             if intent != lookup and not spellings and not any(item["exact"] for item in lexical):
-                narrowed = resolve_catalog_query(connection, snapshot, intent)
+                narrowed = resolve_catalog_query(connection, snapshot, intent, speller=app.state.speller)
                 existing = {item["offer_id"] for item in lexical}
                 lexical.extend(item for item in narrowed.lexical if item["offer_id"] not in existing)
                 if not lexical:

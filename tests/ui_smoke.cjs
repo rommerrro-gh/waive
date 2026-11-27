@@ -28,12 +28,14 @@ async function main() {
     await input.press("Enter");
     await page.getByText("Запрос распознан как «VPN».", {exact: true}).waitFor();
     await page.locator("#results article").first().waitFor();
-    await input.fill("адинэсс");
-    await page.getByRole("option", {name: "AnyDesk", exact: true}).waitFor();
+    const [typo, brand] = process.env.WAIVE_E5_SMOKE === "1"
+      ? ["адинэсс", "AnyDesk"] : ["майкрасавт", "Microsoft"];
+    await input.fill(typo);
+    await page.getByRole("option", {name: brand, exact: true}).waitFor();
     await input.press("Enter");
     await page.getByText("Возможно, вы имели в виду", {exact: true}).waitFor();
-    await page.locator("#spelling-options").getByRole("button", {name: "AnyDesk", exact: true}).click();
-    await page.locator("#results article h2").filter({hasText: "AnyDesk"}).first().waitFor();
+    await page.locator("#spelling-options").getByRole("button", {name: brand, exact: true}).click();
+    await page.locator("#results article h2").filter({hasText: brand}).first().waitFor();
     await input.fill("125344");
     await input.press("Enter");
     await page.getByText("Точного товара нет в наличии. Найдены альтернативы", {exact: true}).waitFor();

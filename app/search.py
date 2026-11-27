@@ -2,7 +2,6 @@ import re
 from dataclasses import dataclass, field
 from html import unescape
 
-from app.brand_recovery import recover_brand
 from app.procurement import filter_offers, positive_query
 from app.relations import alternative_difference, category_coverage, comparable_offer, compatibility_evidence
 from app.requirements import catalog_os, check_requirement, parse_requirements, unmet_requirements
@@ -354,7 +353,7 @@ def lexical_candidates(connection, snapshot, query, *, allow_fuzzy=True):
     params = {"snapshot": snapshot, "query": normalize_query(query)}
     if VPN_BROWSE.fullmatch(query):
         return [item for item in connection.execute(VPN_OFFERS, params) if vpn_offer(item, query)]
-    if is_kaspersky_query(query):
+    if normal_form(query) == "kaspersky":
         candidates = connection.execute(SEARCH_OFFERS, {**params, "query": "Kaspersky"}).fetchall()
         return [
             item for item in candidates
@@ -770,7 +769,7 @@ def catalog_identifier(query):
 
 def resolve_suggestion_alias(query):
     name = normal_form(query)
-    if is_kaspersky_query(name):
+    if name in {"каспер", "лаборатория касперского"} or normalize_query(name) == "Kaspersky":
         return "Kaspersky"
     exact = BRAND_BY_NAME.get(name)
     if exact or len(name) < 4:
@@ -851,7 +850,7 @@ def spelling_matches(connection, snapshot, label):
     return [row for row in rows if vendor_matches(row, brand)]
 
 
-def resolve_catalog_query(connection, snapshot, query, *, prefixes=None):
+def resolve_catalog_query(connection, snapshot, query, *, prefixes=None, speller=None):
     lookup = resolve_search_input(query)
     lexical = lexical_candidates(connection, snapshot, lookup, allow_fuzzy=False)
     if lexical or lookup.casefold() != normalize_search_aliases(query).casefold() or catalog_identifier(query):
@@ -864,23 +863,19 @@ def resolve_catalog_query(connection, snapshot, query, *, prefixes=None):
     if prefixes is None:
         prefixes = suggest_families(connection, snapshot, query)
     completions = [name for name in prefixes if name.casefold().startswith(query.casefold())]
-    if completions:
-        ranked = [(0, name) for name in completions]
-        model_label = None
-    else:
-        ranked = catalog_spelling_options(connection, snapshot, query)
-        leading, separator, suffix = query.partition(" ")
-        brand = recover_brand(leading)
-        model_label = brand + separator + suffix if brand else None
-
+    ranked = [(0, name) for name in completions] if completions else catalog_spelling_options(connection, snapshot, query)
     confirmed = [(score, label, rows) for score, label in ranked
                  if (rows := spelling_matches(connection, snapshot, label))]
-    choices = [label for _, label, _ in confirmed]
-    if (model_label and model_label.casefold() not in {label.casefold() for label in choices}
-            and spelling_matches(connection, snapshot, model_label)):
-        choices.insert(0, model_label)
+    labels = [label for _, label, _ in confirmed]
+    choices = labels.copy()
+    if speller and not completions:
+        proposals = speller.suggest(query, labels)
+        choices = list(dict.fromkeys([
+            *(label for label in proposals if label in labels or spelling_matches(connection, snapshot, label)),
+            *labels,
+        ]))
 
-    # Модель может добавить вариант. Автозамена требует близкого подтверждённого совпадения.
+    # Только близкое однозначное совпадение можно применить без выбора пользователя.
     if (confirmed and choices[0] == confirmed[0][1] and confirmed[0][0] <= 20
             and clear_winner([(score, label) for score, label, _ in confirmed])):
         _, corrected, rows = confirmed[0]
