@@ -203,7 +203,8 @@ async function loadBundle(anchor, context) {
   bundleRequest = controller;
   bundle.hidden = false;
   bundleMessage.textContent = "Подбираем дополнения к «" + anchor.name + "»…";
-  bundle.scrollIntoView({block: "nearest"});
+  bundle.querySelector("h2").focus({preventScroll: true});
+  bundle.scrollIntoView({block: "start"});
   const params = new URLSearchParams({offer_id: anchor.offer_id, catalog_version: context.version});
   if (context.platform) params.set("platform", context.platform);
   if (context.query) params.set("q", context.query);
@@ -219,7 +220,7 @@ async function loadBundle(anchor, context) {
         ? "Для этой категории дополнения не предусмотрены."
         : data.status === "anchor_unavailable"
           ? "Товар сейчас недоступен. Выберите доступную позицию для подбора дополнений."
-        : "Проверенных дополнений к «" + anchor.name + "» нет. Для подбора нужны подтверждённые характеристики.";
+        : "В каталоге нет дополнений с подтверждённой совместимостью для этой позиции.";
     if (!data.items.length) return;
     const cards = [
       productCard({...data.anchor, bundle_available: false}, undefined, context),

@@ -15,12 +15,12 @@ const comparisonToggle = document.querySelector("#toggle-comparison");
 const comparisonItems = document.querySelector("#comparison-items");
 const openComparison = document.querySelector("#open-comparison");
 const comparison = document.querySelector("#comparison");
-const filterPanel = document.querySelector("#search-filters");
 const filterCount = document.querySelector("#active-filters");
 const categoryFilters = document.querySelector("#category-filters");
 const categoryOptions = document.querySelector("#category-options");
 const sortControl = document.querySelector("#sort-control");
 const sortResults = document.querySelector("#sort-results");
+const visitId = globalThis.crypto?.randomUUID?.();
 const demoMode = new URLSearchParams(location.search).get("demo") === "true";
 const selected = new Map();
 const comparisonLimit = 4;
@@ -57,16 +57,19 @@ function attributeValue(item, ...keys) {
   return null;
 }
 
-function addProductLink(parent, item, requestId, label = "Карточка на Softline") {
+function addProductLink(parent, item, requestId, catalogVersion, label = "Карточка на Softline") {
   if (/^https?:\/\//i.test(item.url || "")) {
     const link = addText(parent, "a", label);
     link.href = item.url;
-    if (requestId) {
+    if (requestId || (!demoMode && visitId && catalogVersion)) {
       link.addEventListener("click", () => {
         fetch("/analytics/events/click", {
           method: "POST", keepalive: true,
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({request_id: requestId, offer_id: item.offer_id}),
+          body: JSON.stringify({
+            request_id: requestId, offer_id: item.offer_id,
+            visit_id: demoMode ? undefined : visitId, catalog_version: catalogVersion,
+          }),
         }).catch(() => {});
       });
     }
@@ -138,7 +141,7 @@ function productCard(item, requestId, context) {
     syncComparison();
   });
   renderCompareButton(button);
-  addProductLink(actions, item, requestId, "В каталог");
+  addProductLink(actions, item, requestId, context?.version, "В каталог");
   if (context && !context.anchor && item.bundle_available) {
     filterButton(footer, isBusinessView() ? "Подобрать комплект" : "Подобрать дополнения", () => loadBundle(item, context));
     footer.lastElementChild.classList.add("bundle-toggle");
@@ -348,7 +351,10 @@ function scheduleSuggestions() {
 
 query.addEventListener("input", event => {
   if (event.isComposing) closeSuggestions();
-  else scheduleSuggestions();
+  else {
+    scheduleSuggestions();
+    if (!query.value.trim() && form.dataset.lastQuery !== "") form.requestSubmit();
+  }
 });
 query.addEventListener("compositionend", scheduleSuggestions);
 query.addEventListener("blur", closeSuggestions);
@@ -384,13 +390,13 @@ function validatePrice() {
 }
 
 function showNextResults(focusNew = false) {
-  const {items, requestId, context} = resultSet;
+  const {items, requestId, context, total = items.length} = resultSet;
   const start = results.children.length;
   const cards = items.slice(start, start + pageSize).map(item => productCard(item, requestId, context));
   results.append(...cards);
   const shown = results.children.length;
-  pagination.hidden = shown === items.length;
-  progress.textContent = "Показано " + shown + " из " + items.length;
+  pagination.hidden = shown >= total;
+  progress.textContent = "Показано " + shown + " из " + total;
   if (focusNew && cards.length) {
     const firstTitle = cards[0].querySelector("h2");
     firstTitle.tabIndex = -1;
@@ -398,13 +404,41 @@ function showNextResults(focusNew = false) {
   }
 }
 
-moreResults.addEventListener("click", () => showNextResults(true));
+moreResults.addEventListener("click", async () => {
+  const current = resultSet;
+  if (!current?.browse) {
+    showNextResults(true);
+    return;
+  }
+  moreResults.disabled = true;
+  const signal = current.signal;
+  try {
+    if (signal.aborted) return;
+    const data = await catalogPage(current.browse, signal, current.items.length, current.asOf);
+    if (signal.aborted || resultSet !== current) return;
+    if (data.catalog_version !== current.context.version || !data.results.length) {
+      await loadCatalog(current.browse, signal);
+      return;
+    }
+    current.total = data.total;
+    current.items.push(...data.results);
+    showNextResults(true);
+  } catch (error) {
+    if (!signal.aborted) progress.textContent = "Не удалось загрузить предложения. Попробуйте ещё раз.";
+  } finally {
+    moreResults.disabled = false;
+  }
+});
 
 const selectedCategories = () => new Set(Array.from(categoryOptions.querySelectorAll(":checked"), field => field.value));
 let appliedFilterCount = 0;
 
 function renderCategories(categories, previouslySelected) {
+  const missing = Array.from(categoryOptions.querySelectorAll("label"), label => ({
+    id: label.querySelector("input").value, name: label.textContent,
+  })).filter(({id}) => previouslySelected.has(id) && !categories.some(category => category.id === id));
   categoryOptions.replaceChildren();
+  categories = [...categories, ...missing];
   for (const {id, name} of categories) {
     const label = addText(categoryOptions, "label", "");
     const field = document.createElement("input");
@@ -418,10 +452,12 @@ function renderCategories(categories, previouslySelected) {
 
 function renderOrderedResults() {
   if (!resultSet) return;
-  const {allItems} = resultSet;
+  const {allItems, popularity = {}} = resultSet;
   const categories = selectedCategories();
   const items = allItems.filter(item => !categories.size || categories.has(item.category_id));
-  if (sortResults.value !== "relevance") {
+  if (sortResults.value === "popularity") {
+    items.sort((first, second) => (popularity[second.offer_id] || 0) - (popularity[first.offer_id] || 0));
+  } else if (sortResults.value !== "relevance") {
     const direction = sortResults.value === "price-asc" ? 1 : -1;
     items.sort((first, second) => {
       if (first.price == null || second.price == null) return Number(first.price == null) - Number(second.price == null);
@@ -432,10 +468,7 @@ function renderOrderedResults() {
   results.replaceChildren();
   showNextResults();
   sortControl.hidden = !items.length;
-  document.querySelector("#reset-filters").disabled = !categories.size && !appliedFilterCount;
-  const count = appliedFilterCount + Number(categories.size > 0);
-  filterCount.textContent = count ? " · " + count : "";
-  filterCount.hidden = !count;
+  updateFilterCount(categories);
   if (items.length && !items.some(item => item.available) && resultSet.clarification) {
     status.textContent = resultSet.clarification;
   } else if (items.length) {
@@ -446,8 +479,71 @@ function renderOrderedResults() {
   }
 }
 
-categoryOptions.addEventListener("change", renderOrderedResults);
-sortResults.addEventListener("change", renderOrderedResults);
+function updateFilterCount(categories) {
+  document.querySelector("#reset-filters").disabled = !categories.size && !appliedFilterCount;
+  const count = appliedFilterCount + Number(categories.size > 0);
+  filterCount.textContent = count ? " · " + count : "";
+  filterCount.hidden = !count;
+}
+
+async function catalogPage(params, signal, offset = 0, asOf) {
+  const page = new URLSearchParams(params);
+  if (asOf) page.set("as_of", asOf);
+  page.set("offset", offset);
+  page.set("limit", pageSize);
+  const response = await fetch("/catalog?" + page, {signal});
+  if (!response.ok) throw new Error("Каталог недоступен");
+  return response.json();
+}
+
+async function loadCatalog(params, signal) {
+  const data = await catalogPage(params, signal);
+  if (signal.aborted) return;
+  const categories = new Set(params.getAll("category"));
+  renderCategories(data.result_categories, categories);
+  resultSet = {
+    browse: params, signal, asOf: data.as_of, items: data.results, total: data.total,
+    context: {version: data.catalog_version, platform: params.get("platform"), query: ""},
+  };
+  updateAppliedFilters(data.applied_filters);
+  updateFilterCount(selectedCategories());
+  results.replaceChildren();
+  showNextResults();
+  sortControl.hidden = false;
+  status.textContent = data.total
+    ? "Предложений в каталоге · " + data.total.toLocaleString("ru-RU")
+    : "По выбранным фильтрам ничего не найдено";
+}
+
+function updateAppliedFilters(filters) {
+  const keys = Object.keys(filters);
+  appliedFilterCount = keys.length - Number(keys.includes("price_min") && keys.includes("price_max"));
+}
+
+function changeResultOrder() {
+  if (!resultSet?.browse) {
+    renderOrderedResults();
+    return;
+  }
+  const params = new URLSearchParams(resultSet.browse);
+  params.set("sort", sortResults.value);
+  params.delete("category");
+  for (const id of selectedCategories()) params.append("category", id);
+  activeSearch?.abort();
+  const controller = new AbortController();
+  activeSearch = controller;
+  loadCatalog(params, controller.signal).catch(() => {
+    if (controller.signal.aborted) return;
+    resultSet.signal = controller.signal;
+    sortResults.value = resultSet.browse.get("sort");
+    const restored = new Set(resultSet.browse.getAll("category"));
+    for (const field of categoryOptions.querySelectorAll("input")) field.checked = restored.has(field.value);
+    status.textContent = "Не удалось обновить каталог. Попробуйте ещё раз.";
+  });
+}
+
+categoryOptions.addEventListener("change", changeResultOrder);
+sortResults.addEventListener("change", changeResultOrder);
 document.querySelector("#reset-filters").addEventListener("click", () => {
   for (const key of Object.keys(catalogFilterNames)) {
     const field = form.elements[key];
@@ -456,15 +552,10 @@ document.querySelector("#reset-filters").addEventListener("click", () => {
   }
   for (const field of categoryOptions.querySelectorAll(":checked")) field.checked = false;
   validatePrice();
-  if (query.value.trim() && form.checkValidity()) form.requestSubmit();
+  if (form.checkValidity()) form.requestSubmit();
 });
 
-if (matchMedia("(min-width: 62rem)").matches) filterPanel.open = true;
-
 form.addEventListener("input", validatePrice);
-form.addEventListener("invalid", event => {
-  if (filterPanel.contains(event.target)) filterPanel.open = true;
-}, true);
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -487,19 +578,35 @@ form.addEventListener("submit", async (event) => {
   renderSection("alternatives", []);
   renderSection("recommendations", []);
   const entered = query.value.trim();
-  if (entered.length < 2 || !/[\p{L}\p{N}]/u.test(entered)) {
+  if (entered && (entered.length < 2 || !/[\p{L}\p{N}]/u.test(entered))) {
+    form.dataset.lastQuery = entered;
     status.textContent = "Введите название, бренд или артикул от двух символов.";
     return;
   }
-  status.textContent = "Ищем товары…";
+  status.textContent = entered ? "Ищем товары…" : "Загружаем каталог…";
   const params = new URLSearchParams(new FormData(form));
   for (const key of Object.keys(catalogFilterNames)) if (!params.get(key)) params.delete(key);
+  const sameQuery = form.dataset.lastQuery === entered;
+  const matchingCategorySelection = sameQuery ? selectedCategories() : new Set();
+  form.dataset.lastQuery = entered;
+  lastProcurementQuery = entered || undefined;
+  if (!entered) {
+    params.delete("q");
+    params.set("sort", sortResults.value);
+    for (const id of matchingCategorySelection) params.append("category", id);
+    try {
+      await loadCatalog(params, controller.signal);
+    } catch (error) {
+      if (!controller.signal.aborted) status.textContent = "Каталог временно недоступен. Попробуйте ещё раз.";
+    }
+    return;
+  }
   params.set("track", "true");
+  params.set("with_popularity", "true");
   params.set("expanded", "true");
   if (demoMode) params.set("demo", "true");
   if (isBusinessView() && profile) params.set("with_profile", "true");
   if (isBusinessView()) updateProfileControls();
-  lastProcurementQuery = query.value.trim();
   try {
     const response = await fetch("/search?" + params, { signal: controller.signal });
     if (!response.ok) throw new Error("Поиск недоступен");
@@ -507,15 +614,11 @@ form.addEventListener("submit", async (event) => {
     if (controller.signal.aborted) return;
     const requestId = data.tracked ? data.request_id : undefined;
     const context = {version: data.catalog_version, platform: params.get("platform"), query: entered};
-    const matchingCategorySelection = form.dataset.lastQuery === entered ? selectedCategories() : new Set();
-    if (form.dataset.lastQuery !== entered) sortResults.value = "relevance";
-    form.dataset.lastQuery = entered;
     renderCategories(data.result_categories ?? [], matchingCategorySelection);
-    resultSet = {allItems: data.results, requestId, context, clarification: data.clarification};
+    resultSet = {allItems: data.results, requestId, context, popularity: data.popularity, clarification: data.clarification};
     renderSection("alternatives", data.alternatives, undefined, context);
     renderSection("recommendations", data.recommendations, requestId, context);
-    const active = Object.keys(data.applied_filters);
-    appliedFilterCount = active.length - Number(active.includes("price_min") && active.includes("price_max"));
+    updateAppliedFilters(data.applied_filters);
     showFilters(data);
     correction.hidden = !data.corrected_query;
     correction.querySelector("strong").textContent = data.corrected_query ? "«" + data.corrected_query + "»" : "";
@@ -528,3 +631,5 @@ form.addEventListener("submit", async (event) => {
     if (error.name !== "AbortError") status.textContent = "Поиск временно недоступен. Попробуйте ещё раз.";
   }
 });
+
+document.addEventListener("DOMContentLoaded", () => form.requestSubmit(), {once: true});

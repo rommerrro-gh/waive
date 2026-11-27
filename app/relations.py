@@ -22,6 +22,7 @@ INFRASTRUCTURE = r"(?:^Облачные решения \(IaaS\)|серверы$|
 RELATIONS = (
     Relation(DESKTOP_SOFTWARE + "|" + WORKSTATION, r"^650$", "platform", "Защита рабочих станций"),
     Relation(DESKTOP_SOFTWARE + "|" + WORKSTATION, r"^1033$", "platform", "Резервное копирование"),
+    Relation(r"(?:^| / )Антивирусы(?: для организаций)?(?: / |$)", r"^1033$", "endpoint_backup", "Резервное копирование рабочих станций"),
     Relation(INFRASTRUCTURE, r"^1033$", "server", "Резервное копирование инфраструктуры"),
     Relation(INFRASTRUCTURE, r"мониторинг|техническая поддержка", "product", "Мониторинг или поддержка выбранной системы"),
     Relation(WORKSTATION, r"^82833$", "usb", "Устройства ввода"),
@@ -100,7 +101,7 @@ def named_match(anchor, offer, fields):
 
 
 def compatibility_evidence(anchor, offer, check, required_os=()):
-    if check in ("platform", "server"):
+    if check in ("platform", "server", "endpoint_backup"):
         anchor_os = catalog_os(anchor, anchor["attributes"])
         current = {label for label in required_os if os_matches(label, anchor_os)} if required_os else anchor_os
         supported = catalog_os(offer, offer["attributes"])

@@ -85,6 +85,27 @@ for query, fragment in (
     assert get("/suggest?" + query_params)["suggestions"], query
 assert any("Microsoft Office" in name for name in get("/suggest?q=" + office_id)["suggestions"])
 
+catalog = get("/catalog")
+assert len(catalog["results"]) == 12 and catalog["total"] > 24
+next_page = get("/catalog?offset=12")
+assert not {row["offer_id"] for row in catalog["results"]} & {row["offer_id"] for row in next_page["results"]}
+for sort, reverse in (("price-asc", False), ("price-desc", True)):
+    cards = get("/catalog?sort=" + sort)["results"]
+    prices = [float(card["price"]) for card in cards if card["price"] is not None]
+    assert prices and prices == sorted(prices, reverse=reverse), cards
+assert get("/catalog?sort=popularity")["total"] == catalog["total"]
+assert get("/catalog?term=12&in_stock=true")["results"]
+m365 = get("/bundle?offer_id=130063&catalog_version=" + str(catalog["catalog_version"]))
+assert m365["status"] == "needs_confirmation" and not m365["items"]
+endpoint = get("/bundle?offer_id=222172&catalog_version=" + str(catalog["catalog_version"]))
+assert endpoint["status"] == "confirmed"
+assert all(card["category_id"] == "1033" and card["compatibility"]["matched_platforms"]
+           for card in endpoint["items"])
+category = catalog["results"][0]["category_id"]
+filtered = get("/catalog?" + urlencode({"category": category, "in_stock": "true", "price_min": 1}))
+assert filtered["results"] and all(card["category_id"] == category and card["available"]
+                                   and float(card["price"]) >= 1 for card in filtered["results"])
+
 for query in ("", " ", "а", "???", "x" * 201):
     try:
         get("/search?" + urlencode({"q": query}))

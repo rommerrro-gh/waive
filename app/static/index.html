@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Waive | Поиск по каталогу</title>
   <link rel="stylesheet" href="/style.css">
-  <link rel="stylesheet" href="/catalog.css?v=11">
-  <script src="/search.js?v=11" defer></script>
-  <script src="/procurement.js?v=5" defer></script>
+  <link rel="stylesheet" href="/catalog.css?v=12">
+  <script src="/search.js?v=12" defer></script>
+  <script src="/procurement.js?v=6" defer></script>
 </head>
 <body class="catalog" data-view="search">
   <header class="site-header catalog-shell">
@@ -21,7 +21,7 @@
         <div class="field">
           <div class="query-field">
             <img class="search-icon" src="/icons/search.svg" alt="" width="26" height="26">
-            <input id="query" name="q" type="search" required maxlength="200"
+            <input id="query" name="q" type="search" maxlength="200"
                    placeholder="Название, бренд или артикул" autocomplete="off" role="combobox"
                    aria-autocomplete="list" aria-controls="suggestions" aria-describedby="search-help" aria-expanded="false">
             <ul id="suggestions" role="listbox" aria-label="Подсказки поиска" hidden></ul>
@@ -53,9 +53,10 @@
           <span id="comparison-announcement" class="visually-hidden" role="status"></span>
         </div>
       </div>
+      <div id="filter-suggestions" class="card-actions" aria-label="Предложенные фильтры" hidden></div>
       <div class="catalog-controls">
-        <details id="search-filters">
-          <summary><span>Фильтры <span id="active-filters" hidden></span></span><img src="/icons/chevron-down.svg" alt="" width="16" height="16"></summary>
+        <section id="search-filters" aria-labelledby="filter-title">
+          <h2 id="filter-title">Фильтры <span id="active-filters" hidden></span></h2>
           <div class="filter-panel">
             <div class="catalog-facets">
               <label class="stock-filter"><input type="checkbox" name="in_stock" value="true"> В наличии</label>
@@ -65,7 +66,7 @@
                 <label><span class="visually-hidden">Цена до, ₽</span><input type="number" name="price_max" min="0" max="999999999" step="1" inputmode="numeric" placeholder="До"></label>
               </fieldset>
             </div>
-            <details id="category-filters" class="category-filter" open hidden>
+            <details id="category-filters" class="category-filter" hidden>
               <summary>Категория <img src="/icons/chevron-down.svg" alt="" width="16" height="16"></summary>
               <div id="category-options"></div>
             </details>
@@ -111,9 +112,8 @@
               <button id="reset-filters" class="secondary" type="button" disabled>Сбросить фильтры</button>
             </div>
           </div>
-        </details>
+        </section>
       </div>
-      <div id="filter-suggestions" class="card-actions" aria-label="Предложенные фильтры" hidden></div>
     </form>
     <section id="business-profile" class="business-profile" hidden aria-labelledby="profile-title">
       <h2 id="profile-title">Профиль закупки</h2>
@@ -135,23 +135,24 @@
           <label id="sort-control" hidden><span class="visually-hidden">Сортировка</span>
             <select id="sort-results">
               <option value="relevance">По релевантности</option>
+              <option value="popularity">По популярности</option>
               <option value="price-asc">Сначала дешевле</option>
               <option value="price-desc">Сначала дороже</option>
             </select>
           </label>
         </div>
         <div id="filter-details" class="card-actions" hidden></div>
+        <section id="bundle" class="approval" hidden aria-labelledby="bundle-title">
+          <h2 id="bundle-title" tabindex="-1">Дополнения к выбранному товару</h2>
+          <p id="bundle-message" role="status"></p>
+          <div class="cards"></div>
+        </section>
         <section id="results" class="cards" aria-label="Результаты поиска"></section>
         <div id="result-pagination" class="result-pagination" hidden>
           <p id="result-progress" role="status"></p>
           <button id="more-results" class="secondary" type="button" aria-controls="results">Показать ещё</button>
         </div>
         <section id="alternatives" hidden><h2>Альтернативы</h2><div class="cards"></div></section>
-        <section id="bundle" class="approval" hidden aria-labelledby="bundle-title">
-          <h2 id="bundle-title">Дополнения к выбранному товару</h2>
-          <p id="bundle-message" role="status"></p>
-          <div class="cards"></div>
-        </section>
         <section id="recommendations" hidden><h2>Допродажи с проверкой характеристик</h2><div class="cards"></div></section>
       </div>
       <aside id="business-approval" hidden aria-label="Закупки">

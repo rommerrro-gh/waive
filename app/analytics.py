@@ -63,15 +63,19 @@ def record_search(connection, request_id, query, filters, diagnostics, items, re
 
 
 class Click(BaseModel):
-    request_id: UUID
+    request_id: UUID | None = None
+    visit_id: UUID | None = None
+    catalog_version: int | None = Field(default=None, gt=0)
     offer_id: str = Field(min_length=1, max_length=100)
 
 
 @router.post("/analytics/events/click", status_code=204)
 def record_click(event: Click, request: Request):
-    if configured():
-        try:
-            with request.app.state.pool.connection() as connection:
+    if not (event.request_id and configured()) and not (event.visit_id and event.catalog_version):
+        return Response(status_code=204)
+    try:
+        with request.app.state.pool.connection() as connection, connection.transaction():
+            if event.request_id and configured():
                 connection.execute("""
                     UPDATE search_event SET
                         direct_clicked = direct_clicked OR %s = ANY(direct_ids),
@@ -79,8 +83,15 @@ def record_click(event: Click, request: Request):
                     WHERE id = %s AND created_at >= now() - interval '30 days'
                       AND (%s = ANY(direct_ids) OR %s = ANY(recommendation_ids))
                 """, (event.offer_id, event.offer_id, event.request_id, event.offer_id, event.offer_id))
-        except (Error, PoolTimeout):
-            logger.warning("Клик не записан")
+            if event.visit_id and event.catalog_version:
+                connection.execute("""
+                    INSERT INTO offer_visit (visit_id, offer_id)
+                    SELECT %s, o.id FROM active_catalog a JOIN offer o ON o.snapshot_id = a.snapshot_id
+                    WHERE a.snapshot_id = %s AND o.id = %s
+                    ON CONFLICT DO NOTHING
+                """, (event.visit_id, event.catalog_version, event.offer_id))
+    except (Error, PoolTimeout):
+        logger.warning("Клик не записан")
     return Response(status_code=204)
 
 

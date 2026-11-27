@@ -15,14 +15,30 @@ async function main() {
     const input = page.getByRole("combobox", {name: "Название, бренд или артикул"});
     assert.equal(await input.getAttribute("aria-describedby"), "search-help");
     await page.getByText(/Начните вводить название или артикул/).waitFor();
-    const filters = page.locator("#search-filters > summary");
+    await page.getByRole("heading", {name: "Фильтры", exact: true}).waitFor();
+    assert.equal(await page.locator("#search-filters > summary").count(), 0);
     const stock = page.getByRole("checkbox", {name: "В наличии"});
-    assert.equal(await stock.isVisible(), false);
-    await filters.click();
     assert.equal(await stock.isVisible(), true);
     assert.equal(await page.getByRole("spinbutton", {name: "Цена от, ₽"}).isVisible(), true);
-    await filters.click();
-    assert.equal(await stock.isVisible(), false);
+    await page.getByText(/Предложений в каталоге/).waitFor();
+    const catalogCards = page.locator("#results article");
+    assert.equal(await catalogCards.count(), 12);
+    await page.getByRole("button", {name: "Показать ещё", exact: true}).click();
+    await catalogCards.nth(23).waitFor();
+    const initialSort = page.getByRole("combobox", {name: "Сортировка"});
+    await Promise.all([
+      page.waitForResponse(response => response.url().includes("/catalog?") && response.url().includes("sort=price-desc")),
+      initialSort.selectOption("price-desc"),
+    ]);
+    await catalogCards.first().waitFor();
+    await Promise.all([
+      page.waitForResponse(response => response.url().includes("/catalog?") && response.url().includes("sort=popularity")),
+      initialSort.selectOption("popularity"),
+    ]);
+    await Promise.all([
+      page.waitForResponse(response => response.url().includes("/catalog?") && response.url().includes("sort=relevance")),
+      initialSort.selectOption("relevance"),
+    ]);
     await input.fill("впн");
     await page.getByRole("option", {name: "VPN", exact: true}).waitFor();
     await input.press("Enter");
@@ -91,7 +107,7 @@ async function main() {
       .map(label => Number(label.replace(/[^0-9,]/g, "").replace(",", ".")));
     assert.ok(prices.every((value, index) => index === 0 || value >= prices[index - 1]));
     await sort.selectOption("relevance");
-    await filters.click();
+    await page.locator("#category-filters > summary").click();
     const categories = page.locator("#category-options input");
     assert.ok(await categories.count() > 1);
     await categories.first().check();
@@ -99,7 +115,6 @@ async function main() {
     await page.getByRole("button", {name: "Сбросить фильтры"}).click();
     await cards.nth(11).waitFor();
     assert.equal(await page.locator("#category-options input:checked").count(), 0);
-    await filters.click();
     await input.fill("крипто пр");
     await page.getByRole("option", { name: /КриптоПро CSP TLS/i }).waitFor();
     assert.equal(await input.getAttribute("aria-expanded"), "true");
@@ -168,7 +183,6 @@ async function main() {
     await page.getByRole("link", {name: "Закупки для бизнеса", exact: true}).click();
     await page.waitForURL("**/business?demo=true");
     assert.equal(await input.inputValue(), "антивирус для рабочих станций на год");
-    await filters.click();
     await page.locator("select[name=platform]").selectOption("windows");
     await page.getByRole("spinbutton", {name: "Рабочих мест"}).fill("50");
     await page.getByRole("button", {name: "Сохранить профиль закупки"}).click();
@@ -212,7 +226,6 @@ async function main() {
     await page.getByText("Запрос отправлен.", {exact: true}).waitFor();
     assert.equal(sent.items[0].workplaces, 50);
     assert.equal(sent.email, "anna@example.test");
-    await filters.click();
     await page.locator("select[name=platform]").selectOption("linux");
     await input.fill("офисный пакет");
     assert.equal(await page.locator("select[name=platform]").inputValue(), "windows");
@@ -221,7 +234,6 @@ async function main() {
     assert.ok(process.env.BUNDLE_SMOKE_OFFER);
     await page.getByRole("button", {name: "Удалить профиль"}).click();
     await page.getByRole("spinbutton", {name: "Рабочих мест"}).fill("");
-    await filters.click();
     await page.locator("select[name=platform]").selectOption("");
     await page.locator("select[name=term]").selectOption("");
     await input.fill(process.env.BUNDLE_SMOKE_OFFER);

@@ -467,6 +467,10 @@ def load_category_coverage(connection, snapshot):
     return category_coverage(categories, used)
 
 
+def bundle_available(card, coverage):
+    return card["available"] and bool(coverage.get(card["category_id"]))
+
+
 def recommend_for_anchor(connection, snapshot, anchor, coverage, requirements=(), limit=3, taken=()):
     relations = coverage.get(anchor["category_id"], ())
     if not relations:
@@ -478,7 +482,9 @@ def recommend_for_anchor(connection, snapshot, anchor, coverage, requirements=()
     unique = {anchor["family_id"], *taken}
     pools = []
     for relation, targets in relations:
-        needs_platform = relation.check in {"platform", "server"}
+        if relation.check == "endpoint_backup" and not workstation_security(anchor):
+            continue
+        needs_platform = relation.check in {"platform", "server", "endpoint_backup"}
         if needs_platform and not (explicit_os or catalog_os(anchor, anchor["attributes"])):
             continue
         rows = connection.execute("""
@@ -637,7 +643,7 @@ def assemble_results(connection, snapshot, query, lexical, semantic, filters=Non
     )) for item in (ranked if expanded else ranked[:4])]
     for card in results:
         card["match_type"] = "direct"
-        card["bundle_available"] = card["available"] and bool((coverage or {}).get(card["category_id"]))
+        card["bundle_available"] = bundle_available(card, coverage or {})
     alternatives = find_alternatives(
         connection, snapshot, results, lexical, semantic, categories, requirements, matches_purpose,
     )

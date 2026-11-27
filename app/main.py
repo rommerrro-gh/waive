@@ -3,12 +3,13 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from threading import BoundedSemaphore
 from contextlib import asynccontextmanager
+from datetime import datetime
 from html import unescape
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from psycopg import OperationalError
@@ -17,13 +18,14 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool, PoolTimeout
 
 from app.analytics import configured, record_search, router
+from app.catalog_browse import browse_offers, offer_popularity
 from app.e5_spelling import E5Spelling
 from app.procurement import LICENSE_TYPES, PLATFORMS, purchase_values, requested_filters
 from app.quote import router as quote_router
 from app.requirements import parse_requirements, retrieval_query
 from app.embeddings import vector_literal, vectors
 from app.search import (
-    BRAND_BY_NAME, SEMANTIC_OFFERS, SPELLING_ALIASES, as_card, assemble_results, catalog_identifier, load_category_coverage,
+    BRAND_BY_NAME, SEMANTIC_OFFERS, SPELLING_ALIASES, as_card, assemble_results, bundle_available, catalog_identifier, load_category_coverage,
     is_kaspersky_query, recommend_for_anchor, resolve_catalog_query, suggest_families,
 )
 
@@ -129,30 +131,62 @@ def suggest(q: Annotated[str, Query(max_length=120)]):
     return {"suggestions": items}
 
 
-@app.get("/search")
-def find_products(
-    q: Annotated[str, Query(min_length=1, max_length=200)],
-    semantic: bool = True,
+def product_filters(
     platform: Literal[*PLATFORMS] | None = None,
     term: Annotated[str | None, Query(pattern=r"^(?:[1-9][0-9]?|1[01][0-9]|120|perpetual)$")] = None,
     license_type: Literal[*LICENSE_TYPES] | None = None,
     in_stock: bool = False,
     price_min: Annotated[int | None, Query(ge=0, le=999_999_999)] = None,
     price_max: Annotated[int | None, Query(ge=0, le=999_999_999)] = None,
+):
+    if price_min is not None and price_max is not None and price_min > price_max:
+        raise HTTPException(422, "Цена «От» должна быть не выше цены «До»")
+    return {key: value for key, value in {
+        "platform": platform, "term": term, "license_type": license_type,
+        "in_stock": in_stock or None, "price_min": price_min, "price_max": price_max,
+    }.items() if value is not None}
+
+
+@app.get("/catalog")
+def list_products(
+    filters: Annotated[dict, Depends(product_filters)],
+    sort: Literal["relevance", "price-asc", "price-desc", "popularity"] = "relevance",
+    category: Annotated[list[str] | None, Query(max_length=200)] = None,
+    as_of: datetime | None = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=48)] = 12,
+):
+    if as_of is not None and as_of.tzinfo is None:
+        raise HTTPException(422, "Укажите часовой пояс для даты сортировки")
+    try:
+        with app.state.pool.connection() as connection, connection.transaction():
+            active = connection.execute("SELECT snapshot_id FROM active_catalog").fetchone()
+            if not active:
+                raise HTTPException(503, "Каталог готовится")
+            snapshot = active["snapshot_id"]
+            data = browse_offers(connection, snapshot, filters, sort, category or [], offset, limit, as_of)
+            coverage = snapshot_coverage(connection, snapshot)
+            for card in data["results"]:
+                card["bundle_available"] = bundle_available(card, coverage)
+            return data
+    except (OperationalError, PoolTimeout, QueryCanceled) as error:
+        raise HTTPException(503, "Каталог временно недоступен") from error
+
+
+@app.get("/search")
+def find_products(
+    q: Annotated[str, Query(min_length=1, max_length=200)],
+    filters: Annotated[dict, Depends(product_filters)],
+    semantic: bool = True,
     expanded: bool = False,
     track: bool = False,
     demo: bool = False,
     with_profile: bool = False,
+    with_popularity: bool = False,
 ):
     query = " ".join(q.split())
     if len(query) < 2 or not any(char.isalnum() for char in query):
         raise HTTPException(422, "Введите название, бренд или артикул от двух символов")
-    if price_min is not None and price_max is not None and price_min > price_max:
-        raise HTTPException(422, "Цена «От» должна быть не выше цены «До»")
-    filters = {key: value for key, value in {
-        "platform": platform, "term": term, "license_type": license_type,
-        "in_stock": in_stock or None, "price_min": price_min, "price_max": price_max,
-    }.items() if value is not None}
     diagnostics = {}
     request_id = uuid4()
     track = track and configured()
@@ -196,6 +230,7 @@ def find_products(
                 WHERE snapshot_id = %s AND id = ANY(%s)
                 ORDER BY name, id
             """, (snapshot, category_ids)).fetchall() if category_ids else []
+            popularity = offer_popularity(connection, [item["offer_id"] for item in items]) if with_popularity else {}
             if track:
                 track = record_search(
                     connection, request_id, query, filters, diagnostics, items, recommendations, demo, with_profile,
@@ -206,6 +241,7 @@ def find_products(
     unavailable_items = [item for item in items if not item["available"]] if alternatives else []
     return {
         "results": items,
+        **({"popularity": popularity} if with_popularity else {}),
         "result_categories": result_categories,
         "top4": (available_items + alternatives + recommendations + unavailable_items)[:4],
         "alternatives": alternatives,
