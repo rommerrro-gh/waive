@@ -373,6 +373,10 @@
   box-shadow: 0 .65rem 1.75rem #211c201b;
 }
 .catalog #comparison-items { max-height: min(45vh, 18rem); overflow-y: auto; }
+.catalog .comparison-item button {
+  flex: none;
+  white-space: nowrap;
+}
 .catalog #business-link { position: static; border-color: var(--ink); white-space: nowrap; }
 .catalog .search-icon {
   position: absolute;

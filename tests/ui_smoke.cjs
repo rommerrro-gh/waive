@@ -165,6 +165,11 @@ async function main() {
     await compareMenu.click();
     assert.equal(await page.locator("#comparison-count").innerText(), "Выбрано 4 из 4");
     const chosen = await page.locator("#comparison-items span").allTextContents();
+    assert.ok(await page.locator(".comparison-item button").evaluateAll(buttons => buttons.every(button => {
+      const text = document.createRange();
+      text.selectNodeContents(button);
+      return text.getClientRects().length === 1 && button.scrollWidth <= button.clientWidth;
+    })));
     await page.getByRole("button", { name: "Сравнить предложения" }).click();
     const headers = await dialog.locator("thead th").allTextContents();
     assert.equal(headers.length, 5);
